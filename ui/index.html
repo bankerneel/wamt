@@ -139,6 +139,8 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .side, .col { display: grid; gap: 34px; min-width: 0; align-content: start; }
 
 /* Board */
+.board-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.filter { font: inherit; font-size: 13px; padding: 5px 9px; width: 220px; max-width: 100%; border: 2px solid var(--border); border-radius: 2px; background: var(--panel); color: var(--ink); box-shadow: 3px 3px 0 var(--shadow); }
 .board-head, .row { display: grid; grid-template-columns: 14px minmax(200px, 1fr) 150px 170px 96px 84px 54px; gap: 10px; align-items: center; }
 .board-head { font-size: 11px; font-weight: 800; color: var(--muted); padding: 0 6px 8px; border-bottom: 2px solid var(--border); }
 .board-head span:nth-child(6), .board-head span:nth-child(7), .row .tok, .row .ago { text-align: right; }
@@ -410,7 +412,7 @@ footer b { font-weight: 800; }
   <main class="grid">
     <div class="col">
       <section class="plate big" aria-labelledby="h-board">
-        <h2 class="ticket t-sky" id="h-board">Who's eating right now</h2>
+        <div class="board-top"><h2 class="ticket t-sky" id="h-board">Who's eating right now</h2><input type="search" id="boardFilter" class="filter" placeholder="Filter threads  ( / )" aria-label="Filter threads by title, project, branch or model" autocomplete="off"></div>
         <div class="board-head" aria-hidden="true"><span></span><span>Thread</span><span>Model</span><span>Doing</span><span>Context</span><span>Today</span><span>Last</span></div>
         <div class="rows" id="board" role="list"></div>
         <div class="rows" id="outside" role="list"></div>
@@ -804,12 +806,36 @@ function keyed(container, items) {
   for (const [k, el] of existing) if (!seen.has(k)) el.remove();
 }
 
+// Keeps matching rows, their whole subtree and their ancestors (tree order).
+function filterTree(tree, q) {
+  if (!q) return tree;
+  const text = (n) => (n.kind === "sub" ? [n.s.title, n.s.model] : [n.t.title, n.t.project, n.t.branch, n.t.model]).filter(Boolean).join(" ").toLowerCase();
+  const keep = tree.map(() => false);
+  tree.forEach((e, i) => {
+    if (!text(e.n).includes(q)) return;
+    keep[i] = true;
+    for (let j = i + 1; j < tree.length && tree[j].depth > e.depth; j++) keep[j] = true;
+    for (let j = i - 1, d = e.depth; j >= 0 && d > 0; j--) if (tree[j].depth < d) { keep[j] = true; d = tree[j].depth; }
+  });
+  return tree.filter((_, i) => keep[i]);
+}
+(function boardFilter() {
+  const f = $("boardFilter");
+  f.addEventListener("input", () => { S.boardQ = f.value.trim().toLowerCase(); renderBoard(); });
+  f.addEventListener("keydown", (e) => { if (e.key === "Escape") { f.value = ""; S.boardQ = ""; renderBoard(); f.blur(); } });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target; if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    e.preventDefault(); f.focus();
+  });
+})();
 function renderBoard() {
   const L = S.live; if (!L) return;
-  const tree = buildTree(L);
+  const tree = filterTree(buildTree(L), S.boardQ || "");
   const items = tree.map(({ n, depth, trail, last }) => (n.kind === "sub" ? subRow(n, depth, trail, last) : threadRow(n, depth, trail, last, L)));
   const board = $("board");
-  if (!items.length) board.innerHTML = L.health.t3 === "ok"
+  if (!items.length && S.boardQ) board.innerHTML = `<div class="empty">No thread here matches "${esc(S.boardQ)}". Press Esc to clear.</div>`;
+  else if (!items.length) board.innerHTML = L.health.t3 === "ok"
     ? '<div class="empty">Nobody is eating. No T3 threads were active in the last three hours.</div>'
     : '<div class="empty">T3 thread data is unavailable. The banner above says why.</div>';
   else { if (board.querySelector(".empty")) board.innerHTML = ""; keyed(board, items); }
@@ -1192,7 +1218,7 @@ function weekHtml(D) {
   } else {
     capHtml = `<p class="fine">No weekly limit hit is recorded in these 7 days, so there is no cap line. Claude Code marks weekly hits apart from 5-hour ones (limit type in the error line), so one will be drawn as soon as it is seen. Days 4 to 7 keep totals only.</p>`;
   }
-  return `<div class="weekbox"><div class="weekhead"><h3>the week so far</h3><div class="weektot"><span class="big num">${compact(totW)}</span><span>weighted units, last 7 days</span>${plate >= 0.05 ? `<span data-tip="Weighted 7-day total divided by what the last 5-hour limit hit used">about ${plate.toFixed(1)} full 5-hour plates</span>` : ""}${info.codex_tokens ? `<span>GPT ${compact(info.codex_tokens)} tokens</span>` : ""}</div></div>
+  return `<div class="weekbox"><div class="weekhead"><h3>the week so far</h3><button class="iconbtn" type="button" data-csv title="Daily totals for the last 7 days, as a CSV file">Download CSV</button><div class="weektot"><span class="big num">${compact(totW)}</span><span>weighted units, last 7 days</span>${plate >= 0.05 ? `<span data-tip="Weighted 7-day total divided by what the last 5-hour limit hit used">about ${plate.toFixed(1)} full 5-hour plates</span>` : ""}${info.codex_tokens ? `<span>GPT ${compact(info.codex_tokens)} tokens</span>` : ""}</div></div>
     <div class="weekcols">${cols}</div>${capHtml}</div>`;
 }
 
@@ -1395,6 +1421,35 @@ function standupText(i) {
   L.push(`Output: ${compact(t.t[1] || 0)} tokens over ${full(t.n)} requests`);
   return L.join("\n");
 }
+// The week as CSV: daily totals only, the same numbers the strip shows.
+function weekCsv() {
+  const wk = (S.days && S.days.week) || [];
+  const head = ["day", "requests", "input", "output", "cache_read", "cache_write_5m", "cache_write_1h", "weighted_units", "api_usd_estimate", "opus_weight", "sonnet_weight", "haiku_weight", "other_weight", "codex_tokens", "active_minutes"];
+  const rows = wk.map((d) => { const t = d.total.t, f = d.fam || [0, 0, 0, 0]; return [d.day, d.total.n, t[0], t[1], t[2], t[3], t[4], Math.round(d.total.w), (d.total.w / 1e6).toFixed(2), ...f.slice(0, 4).map((x) => Math.round(x)), d.codex_tokens || 0, d.active_min || 0].join(","); });
+  return [head.join(","), ...rows].join("\n") + "\n";
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest && e.target.closest("[data-csv]"); if (!b) return;
+  const wk = (S.days && S.days.week) || []; if (!wk.length) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([weekCsv()], { type: "text/csv" }));
+  a.download = `who-ate-my-tokens-week-${wk[wk.length - 1].day}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+});
+// End-of-day summary: one notification after 20:00 local, once per day.
+function endOfDay() {
+  if (!A.on || !S.days || !S.days.days || !S.days.days[0]) return;
+  const d = S.days.days[0];
+  if (local(now()).getUTCHours() < 20 || !d.total.n) return;
+  let last = null; try { last = localStorage.getItem("wamt-eod"); } catch (_) {}
+  if (last === d.day) return;
+  try { localStorage.setItem("wamt-eod", d.day); } catch (_) {}
+  const t3 = d.t3 || {};
+  const prs = new Set((t3.prs || []).map((p) => p.repo + "#" + p.n)).size;
+  const body = `${compact(d.total.t[1])} output tokens over ${full(d.total.n)} requests` + (t3.runs ? `; ${t3.runs} runs in ${t3.threads_touched || 0} threads` : "") + (prs ? `, ${prs} PRs` : "") + `; about $${(d.total.w / 1e6).toFixed(0)} at API prices. Copy it for standup from Three days.`;
+  try { new Notification("Today, so far", { body, tag: "eod:" + d.day, icon: "/assets/favicon.png" }); } catch (_) {}
+}
 document.querySelectorAll("[data-copy]").forEach((btn) => btn.addEventListener("click", async () => {
   const text = standupText(Number(btn.dataset.copy));
   const was = btn.textContent;
@@ -1480,6 +1535,7 @@ function alerts(L) {
     if (A.primed && A.on) { try { new Notification(title, { body, tag: k, icon: "/assets/favicon.png" }); } catch (_) {} }
   }
   if (A.seen.size > 500) A.seen = new Set(events.map((e) => e[0]));
+  if (A.primed) endOfDay();
   A.primed = true;
 }
 

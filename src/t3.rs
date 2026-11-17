@@ -267,7 +267,7 @@ impl T3 {
         let conn = Connection::open_with_flags(&uri, flags).map_err(|e| e.to_string())?;
         conn.busy_timeout(Duration::from_millis(2000)).map_err(|e| e.to_string())?;
         // Keep our own footprint small: 2 MB page cache, no mmap.
-        conn.execute_batch("PRAGMA cache_size=-2048; PRAGMA mmap_size=0; PRAGMA query_only=1; PRAGMA temp_store=MEMORY;")
+        conn.execute_batch("PRAGMA cache_size=-512; PRAGMA mmap_size=0; PRAGMA query_only=1; PRAGMA temp_store=MEMORY;")
             .map_err(|e| e.to_string())?;
         conn.set_prepared_statement_cache_capacity(48);
         Ok(T3 {

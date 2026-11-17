@@ -10,7 +10,7 @@ use crate::t3::{short_tool, Ev, ThreadMeta};
 
 /// Tool calls from one thread within this gap merge into one feed line.
 const GROUP_GAP_MS: i64 = 20_000;
-const ITEMS_REMEMBERED: usize = 4_000;
+const ITEMS_REMEMBERED: usize = 1_500;
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct FeedItem {
