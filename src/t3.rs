@@ -34,7 +34,7 @@ const REQUIRED: &[(&str, &[&str])] = &[
         "orchestration_v2_projection_subagents",
         &["subagent_id", "thread_id", "run_id", "child_thread_id", "origin", "status", "started_at", "completed_at", "updated_at", "payload_json"],
     ),
-    ("orchestration_v2_projection_provider_turns", &["thread_id", "started_at", "completed_at", "payload_json"]),
+    ("orchestration_v2_projection_provider_turns", &["thread_id", "started_at", "completed_at", "status", "payload_json"]),
     ("orchestration_v2_projection_runtime_requests", &["thread_id", "kind", "status", "created_at"]),
 ];
 
@@ -288,6 +288,33 @@ impl T3 {
                 if !have.contains(*c) {
                     out.push(format!("{table}.{c} is missing"));
                 }
+            }
+        }
+        out
+    }
+
+    /// Payload keys we rely on, checked on recent rows. A table with rows
+    /// but none carrying the key means T3 renamed it: the numbers built on
+    /// it would be wrong, so this is reported instead of silently zeroed.
+    pub fn json_drift(&self) -> Vec<String> {
+        const PROBES: &[(&str, &str, &str)] = &[
+            ("orchestration_v2_projection_threads", "$.modelSelection.model", "1"),
+            ("orchestration_v2_projection_run_attempts", "$.nativeThreadId", "1"),
+            ("orchestration_v2_projection_provider_turns", "$.tokenUsage.maxTokens", "status = 'completed'"),
+            ("orchestration_v2_projection_subagents", "$.model", "1"),
+            ("orchestration_v2_projection_turn_items", "$.toolName", "type = 'dynamic_tool'"),
+            ("orchestration_v2_projection_runs", "$.startedAt", "status = 'completed'"),
+        ];
+        let mut out = Vec::new();
+        for (table, key, filter) in PROBES {
+            let sql = format!(
+                "SELECT count(*), count(json_extract(payload_json, '{key}'))
+                 FROM (SELECT payload_json FROM {table} WHERE {filter} ORDER BY rowid DESC LIMIT 20)"
+            );
+            match self.conn.query_row(&sql, [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
+                Ok((rows, with_key)) if rows > 0 && with_key == 0 => out.push(format!("{table} rows no longer carry {key}")),
+                Ok(_) => {}
+                Err(e) => out.push(format!("{table}: {e}")),
             }
         }
         out
@@ -646,11 +673,11 @@ impl T3 {
     }
 
     /// Open requests for the user (approvals, input) from the last day.
+    /// T3 marks them `pending` until resolved or cancelled.
     pub fn waiting(&self, now: i64) -> rusqlite::Result<Vec<Waiting>> {
         let mut st = self.conn.prepare_cached(
             "SELECT thread_id, kind, created_at FROM orchestration_v2_projection_runtime_requests
-             WHERE status NOT IN ('resolved','cancelled','expired','rejected','denied','approved','completed')
-               AND created_at >= ?1",
+             WHERE status = 'pending' AND created_at >= ?1",
         )?;
         let rows = st.query_map([iso_ms(now - 24 * 60 * MS_PER_MIN)], |r| {
             Ok(Waiting { thread: r.get(0)?, kind: r.get(1)?, since: ts(r.get(2)?).unwrap_or(0) })
@@ -702,7 +729,7 @@ mod tests {
              CREATE TABLE orchestration_v2_projection_run_attempts (thread_id, payload_json);
              CREATE TABLE orchestration_v2_projection_turn_items (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json);
              CREATE TABLE orchestration_v2_projection_subagents (subagent_id, thread_id, run_id, child_thread_id, origin, status, started_at, completed_at, updated_at, payload_json);
-             CREATE TABLE orchestration_v2_projection_provider_turns (thread_id, started_at, completed_at, payload_json);
+             CREATE TABLE orchestration_v2_projection_provider_turns (thread_id, started_at, completed_at, status, payload_json);
              CREATE TABLE orchestration_v2_projection_runtime_requests (thread_id, kind, status, created_at);"
         ))
         .unwrap();
@@ -737,6 +764,22 @@ mod tests {
         assert!(probs.iter().any(|p| p.contains("orchestration_v2_projection_threads.payload_json")));
         let ok = T3::open(&fixture("schema-ok", false)).unwrap();
         assert!(ok.schema_problems().is_empty(), "{:?}", ok.schema_problems());
+        assert!(ok.json_drift().is_empty(), "{:?}", ok.json_drift());
+    }
+
+    #[test]
+    fn json_drift_reports_renamed_keys() {
+        let p = fixture("drift", false);
+        {
+            let c = Connection::open(&p).unwrap();
+            for _ in 0..20 {
+                c.execute("INSERT INTO orchestration_v2_projection_run_attempts VALUES ('kid', '{\"nativeId\":\"x\"}')", []).unwrap();
+            }
+        }
+        let t = T3::open(&p).unwrap();
+        let d = t.json_drift();
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].contains("nativeThreadId"));
     }
 
     #[test]

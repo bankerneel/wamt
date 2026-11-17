@@ -126,6 +126,9 @@ pub struct Agg {
     pub hits: Vec<i64>,
     /// Kept past the 3-day window on purpose (one number).
     pub cap_ref: Option<CapRef>,
+    /// The latest window worked out (start, end, from a recorded reset).
+    #[serde(default)]
+    pub win_seed: Option<(i64, i64, bool)>,
     /// Message-id hashes already counted -> local day, for dedupe across lines
     /// and across forked session files.
     #[serde(with = "seen_codec")]
@@ -238,7 +241,19 @@ impl Agg {
     /// 10-minute grid, unless a recorded reset (`anchors`) covers it.
     fn windows(&self, anchors: &[i64]) -> Vec<(i64, i64, bool)> {
         let mut out: Vec<(i64, i64, bool)> = Vec::new();
-        for &m in self.mins.keys() {
+        // Continue from the window remembered last time, so pruning old
+        // minutes can never shift where the current window seems to start.
+        let mut from_minute = i64::MIN;
+        if let Some((s, e, a)) = self.win_seed {
+            let reset = anchors.iter().copied().filter(|r| *r > s && r - WINDOW_MS < e).max();
+            let w = match reset {
+                Some(r) => (r - WINDOW_MS, r, true),
+                None => (s, e, a),
+            };
+            from_minute = w.0.div_euclid(MS_PER_MIN);
+            out.push(w);
+        }
+        for &m in self.mins.range(from_minute..).map(|(k, _)| k) {
             let t = m * MS_PER_MIN;
             if out.last().map_or(true, |w| t >= w.1) {
                 let anchored = anchors.iter().copied().filter(|r| r - WINDOW_MS <= t && t < *r).max();
@@ -272,6 +287,12 @@ impl Agg {
     /// Also refreshes `cap_ref` from limit hits inside the kept minutes.
     pub fn window(&mut self, now_ms: i64, anchors: &[i64]) -> WindowEst {
         let wins = self.windows(anchors);
+        if let Some(last) = wins.last().copied() {
+            if self.win_seed != Some(last) {
+                self.win_seed = Some(last);
+                self.dirty = true;
+            }
+        }
         // Reference: the latest window containing a limit hit, measured up
         // to its first hit.
         for &(s, e, _) in wins.iter().rev() {
@@ -491,6 +512,26 @@ mod tests {
         let per = weight("claude-opus-5-5", &Tokens { output: 1000, ..Default::default() }, false);
         assert!((cap.used - 2.0 * per).abs() < 1e-6);
         assert!((est.used - 3.0 * per).abs() < 1e-6);
+    }
+
+    #[test]
+    fn window_start_survives_pruning_under_continuous_use() {
+        let mut a = Agg::default();
+        // A request every 20 minutes from 01:07 to 10:47: no 5-hour gap.
+        let t0 = parse_ts_ms("2026-11-17T01:07:00Z").unwrap();
+        for i in 0..30 {
+            let ts = crate::timeutil::iso_ms(t0 + i * 20 * MS_PER_MIN);
+            usage(&mut a, &ts, "claude-opus-5-5", 10, &format!("c{i}"));
+        }
+        let now = t0 + 29 * 20 * MS_PER_MIN + MS_PER_MIN;
+        let first = a.window(now, &[]);
+        // Chain: 01:00-06:00, then 06:07 snaps to 06:00-11:00.
+        assert_eq!(first.start_ms, parse_ts_ms("2026-11-17T06:00:00Z").unwrap());
+        // Drop the oldest three hours of minutes, as pruning would.
+        let cut = (t0 + 3 * MS_PER_HOUR) / MS_PER_MIN;
+        a.mins.retain(|m, _| *m >= cut);
+        let again = a.window(now, &[]);
+        assert_eq!(again.start_ms, first.start_ms);
     }
 
     #[test]

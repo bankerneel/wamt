@@ -102,6 +102,17 @@ impl FeedBuilder {
     }
 
     pub fn on_event(&mut self, ev: &Ev, threads: &HashMap<String, ThreadMeta>) -> Option<FeedItem> {
+        // Bounded memory: thousands of runs is weeks of work; forgetting old
+        // statuses only risks one repeated "started" line.
+        if self.run_status.len() > 5000 {
+            self.run_status.clear();
+        }
+        if self.sub_status.len() > 5000 {
+            self.sub_status.clear();
+        }
+        if self.groups.len() > 500 {
+            self.groups.clear();
+        }
         match ev.kind.as_str() {
             "run.updated" | "run.created" => {
                 let id = ev.id.clone()?;

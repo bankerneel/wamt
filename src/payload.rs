@@ -20,10 +20,10 @@ pub struct T3Part {
     pub threads: Arc<HashMap<String, ThreadMeta>>,
     pub sessions: Arc<HashMap<String, String>>,
     pub active: Vec<ActiveRun>,
-    pub subs: Vec<Subagent>,
-    pub ctx: HashMap<String, Ctx>,
+    pub subs: Arc<Vec<Subagent>>,
+    pub ctx: Arc<HashMap<String, Ctx>>,
     pub waiting: Vec<Waiting>,
-    pub runs: Vec<RunRow>,
+    pub runs: Arc<Vec<RunRow>>,
     pub last_event_ms: i64,
     pub launch_links: usize,
 }
@@ -48,9 +48,13 @@ pub struct Shared {
     pub t3: Option<T3Part>,
     pub t3_error: Option<String>,
     pub t3_problems: Vec<String>,
+    /// Payload keys T3 seems to have renamed (numbers may be off).
+    pub t3_warnings: Vec<String>,
     pub tx: TxPart,
     pub sys: Sys,
     pub last_days_json: i64,
+    /// A days update was throttled and still needs publishing.
+    pub days_pending: bool,
 }
 
 impl Shared {
@@ -60,9 +64,11 @@ impl Shared {
             t3: None,
             t3_error: None,
             t3_problems: Vec::new(),
+            t3_warnings: Vec::new(),
             tx: TxPart::default(),
             sys: Sys::new(),
             last_days_json: 0,
+            days_pending: false,
         }
     }
 
@@ -84,6 +90,8 @@ impl Shared {
 #[serde(rename_all = "lowercase")]
 pub enum App {
     T3,
+    /// A T3 Code session not (yet) matched to a T3 thread.
+    T3code,
     Desktop,
     Cli,
     Sdk,
@@ -100,6 +108,7 @@ fn app_of(session: &str, info: Option<&SessionInfo>, map: &HashMap<String, Strin
         return App::Notetaker;
     }
     match i.ep.as_deref() {
+        Some("t3-code") => App::T3code,
         Some("claude-desktop") => App::Desktop,
         Some("cli") => App::Cli,
         Some(e) if e.starts_with("sdk") => App::Sdk,
@@ -169,6 +178,7 @@ struct OutsideOut {
 struct NotetakerOut {
     last: i64,
     active: bool,
+    model: Option<String>,
     today: Use,
 }
 
@@ -201,6 +211,7 @@ struct Health<'a> {
     t3: &'a str,
     t3_error: Option<&'a str>,
     problems: &'a [String],
+    warnings: &'a [String],
     seq: i64,
     last_event: i64,
     tx_ready: bool,
@@ -280,7 +291,7 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
         for r in &t.active {
             show.insert(&r.thread);
         }
-        for s in &t.subs {
+        for s in t.subs.iter() {
             let recent = LIVE_RUN_LIKE.contains(&s.status.as_str()) || now - s.updated < 3 * MS_PER_HOUR;
             if recent {
                 show.insert(&s.thread);
@@ -397,16 +408,20 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
     if let Some(d) = tday {
         let mut u = Use::default();
         let mut last = 0;
+        let mut model = None;
         for (sid, s) in &d.sessions {
-            if sh.tx.sessions.get(sid).is_some_and(|i| i.obs) {
+            if let Some(info) = sh.tx.sessions.get(sid).filter(|i| i.obs) {
                 for m in s.models.values() {
                     u.merge(m);
                 }
-                last = last.max(s.last);
+                if s.last > last {
+                    last = s.last;
+                    model = info.model.clone();
+                }
             }
         }
         if u.n > 0 {
-            note = Some(NotetakerOut { last, active: now - last < 2 * MS_PER_MIN, today: u });
+            note = Some(NotetakerOut { last, active: now - last < 2 * MS_PER_MIN, model, today: u });
         }
     }
 
@@ -437,7 +452,14 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
             .map(|p| (p.repo.as_str(), p.n))
             .collect::<HashSet<_>>()
             .len();
-        td.waiting = t.waiting.len() + t.active.iter().filter(|r| r.status == "waiting").count();
+        // Threads waiting on you, each counted once.
+        td.waiting = t
+            .waiting
+            .iter()
+            .map(|w| w.thread.as_str())
+            .chain(t.active.iter().filter(|r| r.status == "waiting").map(|r| r.thread.as_str()))
+            .collect::<HashSet<_>>()
+            .len();
     }
     let window = sh.tx.window.as_ref().map(|w| WindowOut {
         est: w,
@@ -449,9 +471,18 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
         off,
         families: FAMILIES,
         health: Health {
-            t3: if sh.t3.is_some() && sh.t3_problems.is_empty() { "ok" } else if !sh.t3_problems.is_empty() { "schema" } else { "down" },
+            // "ok" only when T3 data is current; the page shows
+            // "unavailable" for anything else rather than zeros.
+            t3: if !sh.t3_problems.is_empty() {
+                "schema"
+            } else if sh.t3_error.is_some() || sh.t3.is_none() {
+                "down"
+            } else {
+                "ok"
+            },
             t3_error: sh.t3_error.as_deref(),
             problems: &sh.t3_problems,
+            warnings: &sh.t3_warnings,
             seq: t3.map(|t| t.seq).unwrap_or(0),
             last_event: t3.map(|t| t.last_event_ms).unwrap_or(0),
             tx_ready: sh.tx.ready,
@@ -560,6 +591,7 @@ struct Days<'a> {
 fn app_key(a: App) -> &'static str {
     match a {
         App::T3 => "t3",
+        App::T3code => "t3code",
         App::Desktop => "desktop",
         App::Cli => "cli",
         App::Sdk => "sdk",

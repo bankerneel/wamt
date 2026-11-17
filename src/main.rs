@@ -77,12 +77,26 @@ fn publish_days(shared: &Mutex<Shared>, hub: &Hub, force: bool) {
     let json = {
         let mut sh = shared.lock().unwrap();
         if !force && now - sh.last_days_json < 2000 {
+            // Throttled: remember to publish on a later pass, never drop it.
+            sh.days_pending = true;
             return;
         }
         sh.last_days_json = now;
+        sh.days_pending = false;
         compose_days(&sh, now)
     };
     hub.set_days(json);
+}
+
+/// Publishes a days update that an earlier throttled call deferred.
+fn flush_days(shared: &Mutex<Shared>, hub: &Hub) {
+    let due = {
+        let sh = shared.lock().unwrap();
+        sh.days_pending && now_ms() - sh.last_days_json >= 2000
+    };
+    if due {
+        publish_days(shared, hub, false);
+    }
 }
 
 // ------------------------------------------------------------ T3 worker
@@ -92,6 +106,9 @@ struct LaunchCache {
     v: u32,
     launch: HashMap<String, String>,
     checked: HashSet<String>,
+    /// The one full launch scan has run (even if it found nothing).
+    #[serde(default)]
+    scanned: bool,
 }
 
 fn t3_worker(cfg_db: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hub: Arc<Hub>) {
@@ -125,10 +142,24 @@ fn t3_worker(cfg_db: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
             thread::sleep(Duration::from_secs(60));
             continue;
         }
-        shared.lock().unwrap().t3_problems.clear();
+        {
+            let mut sh = shared.lock().unwrap();
+            sh.t3_problems.clear();
+            sh.t3_warnings = t3.json_drift();
+            if !sh.t3_warnings.is_empty() {
+                log(format!("T3 payload keys changed: {}", sh.t3_warnings.join("; ")));
+            }
+        }
         if let Err(e) = run_t3(&mut t3, &cache_path, &shared, &hub) {
             log(format!("T3 read error, reconnecting: {e}"));
-            shared.lock().unwrap().t3_error = Some(e.to_string());
+            {
+                // Show "unavailable", never stale runs that look live.
+                let mut sh = shared.lock().unwrap();
+                sh.t3_error = Some(e.to_string());
+                sh.t3 = None;
+            }
+            publish_live(&shared, &hub);
+            publish_days(&shared, &hub, true);
             thread::sleep(Duration::from_secs(3));
         }
     }
@@ -138,17 +169,19 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
     let off = shared.lock().unwrap().off;
     let t0 = std::time::Instant::now();
     let mut cache_dirty = false;
+    let mut scanned = false;
     if let Some(c) = state::load::<LaunchCache>(cache_path) {
         if c.v == 1 {
             t3.launch = c.launch;
             t3.launch_checked = c.checked;
+            scanned = c.scanned || !t3.launch.is_empty();
         }
     }
     t3.begin()?;
     t3.load_threads(None)?;
     t3.load_sessions()?;
     t3.end();
-    if t3.launch.is_empty() {
+    if !scanned {
         log("first start: matching launched threads to their launchers (one pass, a few seconds)");
         t3.begin()?;
         let n = t3.full_launch_scan()?;
@@ -174,11 +207,15 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
 
     let mut threads_arc = Arc::new(t3.threads.clone());
     let mut sessions_arc = Arc::new(t3.session_thread.clone());
-    let mut runs = Vec::new();
-    let mut subs = Vec::new();
+    // Shared with the composer by Arc, so each pass hands over pointers,
+    // not copies; they are rebuilt only when refreshed.
+    let mut runs: Arc<Vec<t3::RunRow>> = Arc::new(Vec::new());
+    let mut subs: Arc<Vec<t3::Subagent>> = Arc::new(Vec::new());
     let mut active = Vec::new();
     let mut waiting = Vec::new();
     let mut ctx: HashMap<String, t3::Ctx> = HashMap::new();
+    let mut ctx_arc: Arc<HashMap<String, t3::Ctx>> = Arc::new(HashMap::new());
+    let mut last_drift = now_ms();
     let (mut last_full, mut last_subs, mut last_runs, mut last_live, mut last_launch) = (0i64, 0i64, 0i64, 0i64, 0i64);
     let mut force = true;
     let mut runs_pending = true;
@@ -254,10 +291,20 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
             t3.load_sessions()?;
             sessions_arc = Arc::new(t3.session_thread.clone());
             threads_dirty = true;
+            // Forget launch checks for threads that no longer exist.
+            let before = t3.launch_checked.len();
+            let known: HashSet<String> = t3.threads.keys().cloned().collect();
+            t3.launch_checked.retain(|id| known.contains(id));
+            cache_dirty |= before != t3.launch_checked.len();
+        }
+        if now - last_drift > 10 * 60_000 {
+            last_drift = now;
+            let drift = t3.json_drift();
+            shared.lock().unwrap().t3_warnings = drift;
         }
         if subs_dirty || now - last_subs > 15_000 {
             last_subs = now;
-            subs = t3.subagents(window_start)?;
+            subs = Arc::new(t3.subagents(window_start)?);
             live_dirty = true;
             days_dirty = true;
         }
@@ -278,9 +325,12 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
             if full_ctx {
                 last_ctx_full = now;
             }
+            let before = ctx.len();
             ctx.retain(|id, _| want.contains(id.as_str()));
+            let mut ctx_changed = before != ctx.len();
             for id in want {
                 if full_ctx || ctx_dirty.contains(id) || !ctx.contains_key(id) {
+                    ctx_changed = true;
                     match t3.ctx(id)? {
                         Some(c) => {
                             ctx.insert(id.to_string(), c);
@@ -292,12 +342,15 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
                 }
             }
             ctx_dirty.clear();
+            if ctx_changed {
+                ctx_arc = Arc::new(ctx.clone());
+            }
         }
         runs_pending |= days_dirty;
         days_dirty = subs_dirty || force;
         if (runs_pending && now - last_runs > 3000) || now - last_runs > 60_000 {
             last_runs = now;
-            runs = t3.runs_since(window_start)?;
+            runs = Arc::new(t3.runs_since(window_start)?);
             runs_pending = false;
             days_dirty = true;
         }
@@ -314,7 +367,7 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
                 sessions: sessions_arc.clone(),
                 active: active.clone(),
                 subs: subs.clone(),
-                ctx: ctx.clone(),
+                ctx: ctx_arc.clone(),
                 waiting: waiting.clone(),
                 runs: runs.clone(),
                 last_event_ms,
@@ -326,9 +379,11 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
         }
         if days_dirty || threads_dirty || force {
             publish_days(shared, hub, force);
+        } else {
+            flush_days(shared, hub);
         }
         if cache_dirty {
-            let c = LaunchCache { v: 1, launch: t3.launch.clone(), checked: t3.launch_checked.clone() };
+            let c = LaunchCache { v: 1, launch: t3.launch.clone(), checked: t3.launch_checked.clone(), scanned: true };
             if state::save(cache_path, &c).is_ok() {
                 cache_dirty = false;
             }
@@ -370,6 +425,7 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
                 today = day;
             }
             t.agg.prune(day - 2, now, off);
+            t.prune_sessions(window_start);
             last_prune = now;
         }
         let t0 = std::time::Instant::now();
@@ -466,7 +522,8 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
                 publish_days(&shared, &hub, force);
             }
         }
-        if t.agg.dirty && now - last_save >= 30_000 {
+        flush_days(&shared, &hub);
+        if t.agg.dirty && now - last_save >= 60_000 {
             last_save = now;
             match state::save(&cache_path, &t.to_cache()) {
                 Ok(n) => {

@@ -17,7 +17,10 @@ use crate::transcript::{parse_line, LineKind};
 
 const CHUNK: usize = 256 * 1024;
 const KEEP_BUF: usize = 512 * 1024;
-const MAX_LINE: usize = 64 * 1024 * 1024;
+/// Lines longer than this are skipped without being held in memory. Usage
+/// lines are model output, which the output limit keeps far below this;
+/// only huge tool results (screenshots, file dumps) get this long.
+const MAX_LINE: usize = 8 * 1024 * 1024;
 const HOT_MS: i64 = 15 * MS_PER_MIN;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -51,7 +54,7 @@ pub struct TailCache {
     pub agg: Agg,
 }
 
-pub const CACHE_VERSION: u32 = 2;
+pub const CACHE_VERSION: u32 = 3;
 
 #[derive(Default, Clone, Debug, Serialize)]
 pub struct TailStats {
@@ -340,6 +343,13 @@ impl Tailer {
         changed
     }
 
+    /// Forgets sessions that are outside the window and no longer tracked,
+    /// so the map (and the cache) never grows past three days of sessions.
+    pub fn prune_sessions(&mut self, window_start_ms: i64) {
+        let tracked: std::collections::HashSet<&str> = self.files.values().map(|t| t.session.as_str()).collect();
+        self.sessions.retain(|id, s| s.last >= window_start_ms || tracked.contains(id.as_str()));
+    }
+
     /// Re-stats files written in the last 15 minutes and reads new bytes.
     pub fn poll_hot(&mut self, window_start_ms: i64, now_ms: i64) -> bool {
         let hot: Vec<PathBuf> = self
@@ -443,7 +453,8 @@ impl Tailer {
         s.obs |= t.obs;
         if !t.sub {
             if s.cwd.is_none() {
-                s.cwd = l.cwd.clone();
+                // Keep only the folder name, never the full path.
+                s.cwd = l.cwd.as_deref().map(|c| c.trim_end_matches('/').rsplit('/').next().unwrap_or(c).to_string());
             }
             if s.ep.is_none() {
                 s.ep = l.entrypoint.clone();
@@ -558,7 +569,11 @@ mod tests {
         append(&f, b);
         t.full_scan(ws, now);
         assert_eq!(out_today(&t), 10);
-        assert_eq!(t.sessions["s1"].cwd.as_deref(), Some("/Users/x/projects/demo"));
+        assert_eq!(t.sessions["s1"].cwd.as_deref(), Some("demo"));
+        // Old sessions are forgotten once outside the window and untracked.
+        t.sessions.insert("ancient".into(), SessionInfo { last: 1, ..Default::default() });
+        t.prune_sessions(ws);
+        assert!(t.sessions.contains_key("s1") && !t.sessions.contains_key("ancient"));
     }
 
     #[test]

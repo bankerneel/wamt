@@ -276,7 +276,7 @@ footer span { white-space: nowrap; }
   <div class="banner" id="banner" hidden></div>
   <header class="plate topbar">
     <div class="brand"><span class="lamp" id="hdrLamp" aria-hidden="true"></span><span class="wordmark">Switchboard</span></div>
-    <div class="status" id="status" role="status" aria-live="polite">Connecting</div>
+    <div class="status" id="status" aria-live="off">Connecting</div>
     <div class="spacer"></div>
     <div class="clock" id="clock"></div>
     <button class="iconbtn" id="themeBtn" type="button">Light</button>
@@ -364,7 +364,7 @@ function ago(ms) {
   if (h < 24) return h + "h " + String(m % 60).padStart(2, "0") + "m";
   return Math.floor(h / 24) + "d " + (h % 24) + "h";
 }
-function off() { return (S.live && S.live.off) || -new Date().getTimezoneOffset(); }
+function off() { return (S.live && S.live.off) ?? -new Date().getTimezoneOffset(); }
 function local(ms) { return new Date(ms + off() * 60000); }
 function hhmm(ms) { const d = local(ms); return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); }
 function hhmmss(ms) { const d = local(ms); return hhmm(ms) + ":" + String(d.getUTCSeconds()).padStart(2, "0"); }
@@ -382,8 +382,8 @@ function modelName(m) {
   return ver ? name + " " + ver : name;
 }
 const sw = (fam) => `<i class="sw m${fam}" aria-hidden="true"></i>`;
-const APPS = { t3: "T3", desktop: "Claude Desktop", cli: "Claude CLI", sdk: "SDK", notetaker: "Note-taker", other: "Other" };
-const EP = { "claude-desktop": "Claude Desktop", cli: "Claude CLI", "sdk-ts": "SDK" };
+const APPS = { t3: "T3", t3code: "T3 Code", desktop: "Claude Desktop", cli: "Claude CLI", sdk: "SDK", notetaker: "Note-taker", other: "Other" };
+const EP = { "t3-code": "T3 Code", "claude-desktop": "Claude Desktop", cli: "Claude CLI", "sdk-ts": "SDK" };
 const tokTotal = (t) => (t ? t.reduce((a, b) => a + b, 0) : 0);
 
 // ------------------------------------------------------------------ tooltip
@@ -432,9 +432,12 @@ function renderHeader() {
   if (h.problems && h.problems.length) {
     banner.hidden = false;
     banner.textContent = "T3's database layout changed, so live thread data is paused: " + h.problems.join("; ") + ". Token figures still update.";
-  } else if (h.t3 === "down" && h.t3_error) {
+  } else if (h.t3 === "down") {
     banner.hidden = false;
-    banner.textContent = "Can't read T3's database: " + h.t3_error + ". Token figures still update.";
+    banner.textContent = (h.t3_error ? "Can't read T3's database: " + h.t3_error + "." : "Connecting to T3's database.") + " Live thread data is unavailable until it can; token figures still update.";
+  } else if (h.warnings && h.warnings.length) {
+    banner.hidden = false;
+    banner.textContent = "T3 changed some fields Switchboard reads, so some thread numbers may be wrong: " + h.warnings.join("; ") + ".";
   } else banner.hidden = true;
   const live = L.threads.some((t) => t.run && t.run.status !== "waiting") || L.subs.some((s) => s.status === "running");
   const need = L.today.waiting > 0;
@@ -458,7 +461,8 @@ function renderReadout() {
   const n = (v) => `<span class="din num">${compact(v)}</span>`;
   const parts = [];
   parts.push(`Today so far: ${n(t.output)} output tokens from ${n(t.calls)} requests (${n(t.tokens)} tokens in all), active for <span class="din num">${(t.active_min / 60).toFixed(1)}</span> hours.`);
-  parts.push(`T3 ran ${n(t.runs)} runs in ${n(t.threads)} threads and ${n(t.subagents)} subagents, and linked ${n(t.prs)} PRs.`);
+  if (L.health.t3 === "ok") parts.push(`T3 ran ${n(t.runs)} runs in ${n(t.threads)} threads and ${n(t.subagents)} subagents, and linked ${n(t.prs)} PRs.`);
+  else parts.push("T3 thread data is unavailable right now.");
   if (t.hits) parts.push(`You reached the usage limit ${t.hits === 1 ? "once" : t.hits + " times"} today.`);
   const live = [];
   if (t.runs_live) live.push(`<span class="live-n">${t.runs_live} run${t.runs_live === 1 ? "" : "s"} going</span>`);
@@ -575,7 +579,7 @@ function subRow(n, depth, trail, last) {
   if (live) nowHtml = `<span class="step">Working</span> <span class="muted" data-since="${s.started || s.updated}"></span><span class="line2">${s.origin === "provider_native" ? "built-in subagent" : "T3 subagent"}</span>`;
   else {
     const took = s.started && s.completed ? dur(s.completed - s.started) : "";
-    const word = s.status === "completed" ? "Done" : s.status.charAt(0).toUpperCase() + s.status.slice(1);
+    const word = esc(s.status === "completed" ? "Done" : s.status.charAt(0).toUpperCase() + s.status.slice(1));
     nowHtml = `<span class="${s.status === "failed" ? "need" : "ink2"}">${word}</span> <span class="muted" data-ago="${s.completed || s.updated}"></span><span class="line2">${took ? "took " + took : ""}</span>`;
   }
   return {
@@ -617,7 +621,9 @@ function renderBoard() {
   const tree = buildTree(L);
   const items = tree.map(({ n, depth, trail, last }) => (n.kind === "sub" ? subRow(n, depth, trail, last) : threadRow(n, depth, trail, last, L)));
   const board = $("board");
-  if (!items.length) board.innerHTML = '<div class="empty">No T3 threads were active in the last three hours.</div>';
+  if (!items.length) board.innerHTML = L.health.t3 === "ok"
+    ? '<div class="empty">No T3 threads were active in the last three hours.</div>'
+    : '<div class="empty">T3 thread data is unavailable. The banner above says why.</div>';
   else { if (board.querySelector(".empty")) board.innerHTML = ""; keyed(board, items); }
 
   const out = [];
@@ -635,7 +641,7 @@ function renderBoard() {
     const nt = L.notetaker;
     out.push({ key: "o:notetaker", depth: 0, html: `<span class="lamp ${nt.active ? "on" : ""}" aria-hidden="true"></span>
       <div class="who"><div class="names"><div class="t">claude-mem note-taker</div><div class="sub">writes memory notes after your sessions, ${full(nt.today.n)} calls today</div></div></div>
-      <div class="model">${sw(2)}Haiku</div>
+      <div class="model">${sw(family(nt.model))}${esc(modelName(nt.model))}</div>
       <div class="now">${nt.active ? '<span class="step">Writing notes</span>' : '<span class="ink2">Idle</span>'} <span class="muted" data-ago="${nt.last}"></span></div>
       <div class="ctx"></div>
       <div class="tok num">${compact(nt.today.t[1])}<small>${compact(tokTotal(nt.today.t))} total</small></div>
@@ -918,20 +924,24 @@ function renderDays(force) {
       const tipTxt = f.map((v, k) => (v > 0 ? `${FAM[k]} ${Math.round((v / fw) * 100)}%` : "")).filter(Boolean).join("<br>");
       return `<td data-tip="${esc(tipTxt)}"><span class="split" role="img" aria-label="${esc(tipTxt.replace(/<br>/g, ", "))}">` + f.map((v, k) => (v > 0 ? `<i style="width:${(v / fw) * 100}%;background:var(--m${k})"></i>` : "")).join("") + "</span></td>";
     }],
-    ["T3 runs", (d) => { const bad = (d.t3.by_status.failed || 0) + (d.t3.by_status.interrupted || 0); return cell(full(d.t3.runs), !d.t3.runs, bad ? bad + " failed" : ""); }],
-    ["Run time", (d) => cell(d.t3.run_ms ? dur(d.t3.run_ms) : "none", !d.t3.run_ms)],
-    ["Threads worked in", (d) => cell(full(d.t3.threads_touched), !d.t3.threads_touched, d.t3.created ? d.t3.created + " new" : "")],
+    ["T3 runs", (d) => { const bad = (d.t3.by_status.failed || 0) + (d.t3.by_status.interrupted || 0); return cell(full(d.t3.runs), !d.t3.runs, bad ? bad + " failed" : ""); }, true],
+    ["Run time", (d) => cell(d.t3.run_ms ? dur(d.t3.run_ms) : "none", !d.t3.run_ms), true],
+    ["Threads worked in", (d) => cell(full(d.t3.threads_touched), !d.t3.threads_touched, d.t3.created ? d.t3.created + " new" : ""), true],
     ["Subagents", (d) => {
       const outside = Object.values(d.outside_subs).reduce((a, b) => a + b, 0);
       const n = d.t3.subagents + outside;
       const by = Object.entries(d.t3.sub_models).map(([m, c]) => `${modelName(m)} ${c}`).join(", ");
       return `<td class="${n ? "" : "zero"}" data-tip="${esc((by || "none in T3") + (outside ? "<br>" + outside + " outside T3" : ""))}">${full(n)}${d.t3.sub_failed ? `<small>${d.t3.sub_failed} failed</small>` : ""}</td>`;
-    }],
-    ["PRs linked", (d) => { const n = new Set(d.t3.prs.map((p) => p.repo + "#" + p.n)).size; return cell(full(n), !n); }],
+    }, true],
+    ["PRs linked", (d) => { const n = new Set(d.t3.prs.map((p) => p.repo + "#" + p.n)).size; return cell(full(n), !n); }, true],
     ["Limit reached", (d) => cell(d.hits.length ? d.hits.map(hhmm).join(", ") : "no", !d.hits.length)],
   ];
   h += `<div class="cmpwrap"><table class="cmpt"><thead><tr><th></th>${days.map((d, i) => `<th>${esc(names[i])}</th>`).join("")}</tr></thead><tbody>` +
-    rows.map(([label, fn]) => `<tr><td>${esc(label)}</td>${days.map((d, i) => fn(d, i)).join("")}</tr>`).join("") + "</tbody></table></div>";
+    rows.map(([label, fn, fromT3]) => {
+      // T3 rows say "unavailable" while T3 can't be read, never a false zero.
+      const t3Down = fromT3 && S.live && S.live.health.t3 !== "ok";
+      return `<tr><td>${esc(label)}</td>${days.map((d, i) => (t3Down ? `<td class="zero">unavailable</td>` : fn(d, i))).join("")}</tr>`;
+    }).join("") + "</tbody></table></div>";
 
   // Where the usage went, per day.
   h += `<div class="dcols">` + days.map((d, i) => {
@@ -1038,8 +1048,17 @@ function connect() {
   es.addEventListener("live", (e) => { S.connected = true; onLive(JSON.parse(e.data)); });
   es.addEventListener("days", (e) => onDays(e.data));
   es.addEventListener("feed", (e) => onFeed(JSON.parse(e.data), true));
-  es.onerror = () => { S.connected = false; renderStatus(); $("hdrLamp").className = "lamp"; };
-  es.onopen = () => { S.connected = true; };
+  es.onopen = () => { S.connected = true; S.retry = 1000; };
+  es.onerror = () => {
+    S.connected = false; renderStatus(); $("hdrLamp").className = "lamp";
+    // The browser retries dropped streams itself, but gives up for good
+    // after an HTTP error (a restart mid-request, the connection cap).
+    // Then reconnect here, backing off up to 30 s.
+    if (es.readyState === EventSource.CLOSED) {
+      S.retry = Math.min(30000, (S.retry || 1000) * 2);
+      setTimeout(connect, S.retry);
+    }
+  };
 }
 connect();
 </script>
