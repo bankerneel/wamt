@@ -144,6 +144,17 @@ pub struct Line {
     pub entrypoint: Option<String>,
     pub cwd: Option<String>,
     pub title: Option<String>,
+    /// Rate-limit lines only: the limit hit is a weekly one (`quotaLimits.
+    /// rateLimitType` starts with `seven_day`). False for the 5-hour limit
+    /// and for older lines that carry no such field.
+    pub weekly: bool,
+}
+
+/// The short limit metadata on a rate-limit error line (never its text).
+#[derive(Deserialize, Default)]
+struct RawQuota {
+    #[serde(rename = "rateLimitType", default)]
+    kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -166,6 +177,8 @@ struct RawLine<'a> {
     cwd: Option<Lenient<Cow<'a, str>>>,
     #[serde(rename = "customTitle", default)]
     custom_title: Option<Lenient<Cow<'a, str>>>,
+    #[serde(rename = "quotaLimits", default)]
+    quota: Option<Lenient<RawQuota>>,
 }
 
 /// Accepts the expected type or silently ignores anything else, so one
@@ -264,6 +277,7 @@ pub fn parse_line(line: &[u8], want_meta: bool) -> Option<Line> {
         entrypoint,
         cwd,
         title: None,
+        weekly: false,
     };
     let t = raw.t.as_deref().unwrap_or("");
 
@@ -277,6 +291,11 @@ pub fn parse_line(line: &[u8], want_meta: bool) -> Option<Line> {
     let error = raw.error.and_then(Lenient::get);
     if api_error && error.as_deref() == Some("rate_limit") {
         out.kind = LineKind::RateLimit;
+        out.weekly = raw
+            .quota
+            .and_then(Lenient::get)
+            .and_then(|q| q.kind)
+            .is_some_and(|k| k.starts_with("seven_day"));
         return if ts_ms > 0 { Some(out) } else { None };
     }
 
@@ -355,6 +374,19 @@ mod tests {
         let l = parse_line(s.as_bytes(), false).unwrap();
         assert_eq!(l.kind, LineKind::RateLimit);
         assert_eq!(l.ts_ms, parse_ts_ms("2026-11-17T12:56:00Z").unwrap());
+        assert!(!l.weekly);
+    }
+
+    #[test]
+    fn weekly_and_five_hour_limits_are_told_apart() {
+        let mk = |kind: &str| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"2026-11-17T12:56:00Z","isApiErrorMessage":true,"error":"rate_limit","quotaLimits":{{"status":"rejected","rateLimitType":"{kind}","resetsAt":1794477600}},"message":{{"id":"m","model":"<synthetic>","usage":{{"input_tokens":0,"output_tokens":0}}}}}}"#
+            )
+        };
+        assert!(!parse_line(mk("five_hour").as_bytes(), false).unwrap().weekly);
+        assert!(parse_line(mk("seven_day").as_bytes(), false).unwrap().weekly);
+        assert!(parse_line(mk("seven_day_opus").as_bytes(), false).unwrap().weekly);
     }
 
     #[test]

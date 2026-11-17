@@ -23,10 +23,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::agg::DayAgg;
+use crate::agg::{DayAgg, WEEK_DAYS};
 use crate::feed::FeedBuilder;
 use crate::hub::Hub;
-use crate::payload::{compose_days, compose_live, Shared, T3Part};
+use crate::payload::{build_week, compose_days, compose_live, Shared, T3Part};
 use crate::timeutil::{day_of, day_start_ms, now_ms, MS_PER_MIN};
 
 const UI: &str = include_str!("../ui/index.html");
@@ -452,22 +452,26 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
     let (mut last_full, mut last_pub, mut last_save, mut last_prune) = (0i64, 0i64, now_ms(), 0i64);
     let mut last_tracked = 0i64;
     let mut days_arc: Arc<Vec<(i32, DayAgg)>> = Arc::new(Vec::new());
+    let mut week_part = payload::WeekPart::default();
     let mut first = true;
     loop {
         let now = now_ms();
         let day = day_of(now, off);
-        let window_start = day_start_ms(day - 2, off);
+        // Transcript files are read for the whole week; session detail (names,
+        // buckets, per-session lines) only for the newest three days.
+        let window_start = day_start_ms(day - (WEEK_DAYS - 1), off);
+        let detail_start = day_start_ms(day - 2, off);
         let mut force = first;
         if day != today || now - last_prune > 60_000 {
             if day != today {
-                log("new day: rolling the three-day window");
+                log("new day: rolling the seven-day window (days 4 to 7 keep totals only)");
                 force = true;
                 today = day;
             }
-            t.agg.prune(day - 2, now, off);
-            t.prune_sessions(window_start);
+            t.agg.prune(day - (WEEK_DAYS - 1), now, off);
+            t.prune_sessions(detail_start);
             if let Some(c) = cx.as_mut() {
-                c.prune(day, window_start, now);
+                c.prune(day, detail_start, now);
             }
             last_prune = now;
         }
@@ -502,6 +506,14 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
             };
         }
         if first {
+            // Right after the startup scan: compact days 4 to 7 and drop what
+            // only they needed (the scan itself already skips their detail).
+            t.agg.prune(day - (WEEK_DAYS - 1), now, off);
+            t.prune_sessions(detail_start);
+            if let Some(c) = cx.as_mut() {
+                c.prune(day, detail_start, now);
+            }
+            last_prune = now;
             log(format!(
                 "transcripts ready in {} ms: {} files tracked, {} MB read",
                 t0.elapsed().as_millis(),
@@ -513,7 +525,13 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
             last_pub = now;
             let anchors = shared.lock().unwrap().anchors();
             let window = t.agg.window(now, &anchors);
+            t.agg.refresh_week_cap(now, off);
             if changed || force {
+                let cxd: HashMap<i32, u64> = cx
+                    .as_ref()
+                    .map(|c| c.agg.days.iter().map(|(d, a)| (*d, a.total().t.total())).collect())
+                    .unwrap_or_default();
+                week_part = build_week(&t.agg.week(day), &cxd, &t.agg.week_hits, t.agg.week_cap.as_ref(), off);
                 let mut v: Vec<(i32, DayAgg)> = Vec::with_capacity(3);
                 for d in [day, day - 1, day - 2] {
                     let mut a = t.agg.days.get(&d).cloned();
@@ -546,7 +564,7 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
                 .sessions
                 .iter()
                 .chain(cx.iter().flat_map(|c| c.sessions.iter()))
-                .filter(|(_, s)| s.last >= window_start)
+                .filter(|(_, s)| s.last >= detail_start)
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
             let woke: Vec<String> = std::mem::take(&mut t.woke);
@@ -555,6 +573,7 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
             {
                 let mut sh = shared.lock().unwrap();
                 sh.tx.days = days_arc.clone();
+                sh.tx.week = week_part.clone();
                 sh.tx.sessions = Arc::new(sessions);
                 sh.tx.window = Some(window);
                 sh.tx.spark_start = start;

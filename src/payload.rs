@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::agg::{ColdUse, DayAgg, Use, WindowEst};
+use crate::agg::{CapRef, ColdUse, DayAgg, Use, WeekDay, WindowEst};
 use crate::sys::{memory_bytes, Sys};
 use crate::t3::{ActiveRun, Ctx, Pr, RunRow, Subagent, ThreadMeta, Waiting};
 use crate::tail::{SessionInfo, TailStats};
@@ -32,6 +32,8 @@ pub struct T3Part {
 #[derive(Default)]
 pub struct TxPart {
     pub days: Arc<Vec<(i32, DayAgg)>>,
+    /// The 7-day strip: daily totals only.
+    pub week: WeekPart,
     pub sessions: Arc<HashMap<String, SessionInfo>>,
     pub window: Option<WindowEst>,
     pub spark_start: i64,
@@ -43,6 +45,70 @@ pub struct TxPart {
     /// Codex's own limit meter (the latest seen).
     pub codex_limit: Option<crate::codex::CodexLimit>,
     pub ready: bool,
+}
+
+/// Daily totals for one of the last 7 days (no per-session detail).
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct WeekDayOut {
+    pub day: String,
+    pub start: i64,
+    /// Claude totals: tokens, requests, weighted units.
+    pub total: Use,
+    /// Weighted units per model family (opus, sonnet, haiku, other).
+    pub fam: [f64; 4],
+    /// Codex tokens that day (Codex has no weight).
+    pub codex_tokens: u64,
+    /// Weighted units per local hour (all Claude families).
+    pub hours: Vec<f64>,
+    pub active_min: u32,
+}
+
+/// The week as a whole.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct WeekInfo {
+    /// Weighted units over the 7 days.
+    pub total_w: f64,
+    pub codex_tokens: u64,
+    /// Weekly-limit hits in the window.
+    pub hits: Vec<i64>,
+    /// Weighted usage of the 7 days up to the latest weekly-limit hit. None
+    /// when no weekly hit is recorded (then no cap line is drawn).
+    pub cap: Option<f64>,
+    pub cap_hit: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WeekPart {
+    pub days: Vec<WeekDayOut>,
+    pub info: WeekInfo,
+}
+
+fn round2(x: f64) -> f64 {
+    (x * 100.0).round() / 100.0
+}
+
+/// Builds the 7-day payload from compact day summaries (oldest first).
+/// `codex` maps a local day to Codex tokens that day.
+pub fn build_week(claude: &[WeekDay], codex: &HashMap<i32, u64>, hits: &[i64], cap: Option<&CapRef>, off: i32) -> WeekPart {
+    let mut info = WeekInfo { hits: hits.to_vec(), cap: cap.map(|c| round2(c.used)), cap_hit: cap.map(|c| c.hit_ms), ..Default::default() };
+    let days: Vec<WeekDayOut> = claude
+        .iter()
+        .map(|d| {
+            let cx = codex.get(&d.day).copied().unwrap_or(0);
+            info.total_w += d.total.w;
+            info.codex_tokens += cx;
+            WeekDayOut {
+                day: day_label(d.day),
+                start: day_start_ms(d.day, off),
+                total: d.total.clone(),
+                fam: d.fam.map(round2),
+                codex_tokens: cx,
+                hours: d.hours.iter().map(|h| round2(*h)).collect(),
+                active_min: d.active_min,
+            }
+        })
+        .collect();
+    WeekPart { days, info }
 }
 
 pub struct Shared {
@@ -597,6 +663,8 @@ struct DayOut<'a> {
 struct Days<'a> {
     now: i64,
     days: Vec<DayOut<'a>>,
+    week: &'a [WeekDayOut],
+    week_info: &'a WeekInfo,
 }
 
 fn app_key(a: App) -> &'static str {
@@ -811,5 +879,76 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
             cold: cold_day,
         });
     }
-    serde_json::to_string(&Days { now, days }).unwrap_or_else(|_| "{}".into())
+    serde_json::to_string(&Days { now, days, week: &sh.tx.week.days, week_info: &sh.tx.week.info }).unwrap_or_else(|_| "{}".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agg::{Agg, UsageIn, WEEK_DAYS};
+    use crate::timeutil::now_ms;
+    use crate::transcript::Tokens;
+
+    const OFF: i32 = 330;
+
+    fn add(a: &mut Agg, ts: i64, model: &str, out: u64, id: &str) {
+        let t = Tokens { output: out, ..Default::default() };
+        a.add_usage(
+            UsageIn { session: "s", sub: false, observer: false, ts_ms: ts, model, tokens: &t, fast: false, msg_id: Some(id), prev_ms: 0, codex: false },
+            OFF,
+        );
+    }
+
+    #[test]
+    fn week_payload_has_seven_days_oldest_first() {
+        let mut a = Agg::default();
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        add(&mut a, day_start_ms(today, OFF) + 5 * MS_PER_HOUR, "claude-opus-5-5", 1000, "t1");
+        add(&mut a, day_start_ms(today - 5, OFF) + 2 * MS_PER_HOUR, "claude-sonnet-5-5", 500, "t2");
+        add(&mut a, day_start_ms(today - 5, OFF) + 3 * MS_PER_HOUR, "claude-haiku-5-5", 500, "t3");
+        let mut cx = HashMap::new();
+        cx.insert(today - 1, 777u64);
+        let w = build_week(&a.week(today), &cx, &[], None, OFF);
+        assert_eq!(w.days.len() as i32, WEEK_DAYS);
+        assert_eq!(w.days[6].start, day_start_ms(today, OFF));
+        assert_eq!(w.days[0].start, day_start_ms(today - 6, OFF));
+        assert_eq!(w.days[6].total.n, 1);
+        assert_eq!(w.days[1].total.n, 2);
+        assert!(w.days[1].fam[1] > 0.0 && w.days[1].fam[2] > 0.0 && w.days[1].fam[0] == 0.0);
+        assert_eq!(w.days[5].codex_tokens, 777);
+        assert_eq!(w.info.codex_tokens, 777);
+        assert_eq!(w.days[0].hours.len(), 24);
+        assert!(w.info.cap.is_none() && w.info.cap_hit.is_none());
+        let sum: f64 = w.days.iter().map(|d| d.total.w).sum();
+        assert!((w.info.total_w - sum).abs() < 1e-9 && sum > 0.0);
+        // Serialises with the keys the page reads.
+        let v: serde_json::Value = serde_json::to_value(&w.days[6]).unwrap();
+        for k in ["day", "total", "fam", "codex_tokens", "hours", "active_min"] {
+            assert!(v.get(k).is_some(), "{k}");
+        }
+        assert!(v["total"].get("t").is_some() && v["total"].get("n").is_some() && v["total"].get("w").is_some());
+    }
+
+    #[test]
+    fn week_cap_only_when_a_weekly_hit_exists() {
+        let mut a = Agg::default();
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        add(&mut a, day_start_ms(today - 2, OFF) + MS_PER_HOUR, "claude-opus-5-5", 1000, "a");
+        add(&mut a, day_start_ms(today, OFF) + MS_PER_HOUR, "claude-opus-5-5", 1000, "b");
+        add(&mut a, day_start_ms(today, OFF) + 9 * MS_PER_HOUR, "claude-opus-5-5", 1000, "c");
+        a.refresh_week_cap(now, OFF);
+        assert!(a.week_cap.is_none());
+        // A hit at 03:00 today counts usage up to that hour only (not "c").
+        assert!(a.add_weekly_hit(day_start_ms(today, OFF) + 3 * MS_PER_HOUR));
+        a.refresh_week_cap(now, OFF);
+        let cap = a.week_cap.clone().unwrap();
+        let one = crate::transcript::weight("claude-opus-5-5", &Tokens { output: 1000, ..Default::default() }, false);
+        assert!((cap.used - 2.0 * one).abs() < 1e-6, "{}", cap.used);
+        // A weekly hit never touches the 5-hour hits.
+        assert!(a.hits.is_empty());
+        let w = build_week(&a.week(today), &HashMap::new(), &a.week_hits, a.week_cap.as_ref(), OFF);
+        assert!(w.info.cap.is_some() && w.info.hits.len() == 1);
+    }
 }

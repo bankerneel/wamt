@@ -23,12 +23,12 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::agg::{Agg, UsageIn};
+use crate::agg::{Agg, UsageIn, WEEK_DAYS};
 use crate::tail::{drop_cache, ino, mtime_ms, no_cache, SessionInfo, CHUNK, HOT_MS, KEEP_BUF, MAX_LINE};
 use crate::timeutil::{civil_from_days, day_of, parse_ts_ms, MS_PER_MIN};
 use crate::transcript::{Lenient, Tokens};
 
-pub const CODEX_CACHE_VERSION: u32 = 2;
+pub const CODEX_CACHE_VERSION: u32 = 3;
 /// The `ep` value Codex sessions carry in `SessionInfo`.
 pub const EP: &str = "codex";
 
@@ -318,14 +318,14 @@ impl CodexTail {
         self.files.insert(path.to_path_buf(), CFile { sid, ..Default::default() });
     }
 
-    /// Lists the day folders from three days before the window's first day
-    /// up to today (the window is the last three local days).
+    /// Lists the day folders from one day before the window's first day
+    /// up to today (the window is the last seven local days).
     pub fn full_scan(&mut self, window_start_ms: i64, now_ms: i64) -> bool {
         let today = day_of(now_ms, self.off);
         let mut changed = false;
         let mut present = std::collections::HashSet::new();
         let mut files = Vec::new();
-        for day in (today - 3)..=today {
+        for day in (today - WEEK_DAYS)..=today {
             let dir = self.day_dir(day);
             if let Ok(m) = fs::metadata(&dir) {
                 self.dirs.insert(dir.clone(), mtime_ms(&m));
@@ -397,7 +397,7 @@ impl CodexTail {
 
     /// Forgets sessions outside the window that no tracked file feeds.
     pub fn prune(&mut self, day: i32, window_start_ms: i64, now_ms: i64) {
-        self.agg.prune(day - 2, now_ms, self.off);
+        self.agg.prune(day - (WEEK_DAYS - 1), now_ms, self.off);
         let tracked: std::collections::HashSet<&str> = self.files.values().map(|t| t.sid.as_str()).collect();
         self.sessions.retain(|id, s| s.last >= window_start_ms || tracked.contains(id.as_str()));
         if self.limit.as_ref().is_some_and(|l| l.ts < window_start_ms) {
@@ -513,7 +513,7 @@ impl CodexTail {
                 let model = t.model.clone().unwrap_or_else(|| "gpt".to_string());
                 // Without a response id, a stand-in keeps re-reads from double counting.
                 let key = response_id.unwrap_or_else(|| format!("{}|{}|{}", t.sid, ts_ms, tokens.total()));
-                let counted = self.agg.add_usage(
+                let counted = self.agg.add_usage_at(
                     UsageIn {
                         session: &t.sid,
                         sub: t.sub,
@@ -527,6 +527,7 @@ impl CodexTail {
                         codex: true,
                     },
                     self.off,
+                    now_ms,
                 );
                 if counted {
                     let s = self.sessions.entry(t.sid.clone()).or_default();

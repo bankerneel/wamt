@@ -251,6 +251,26 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .cmpt td.zero { color: var(--muted); font-weight: 500; }
 .split { display: inline-flex; gap: 2px; height: 10px; width: 120px; border: 1.5px solid var(--border); border-radius: 2px; overflow: hidden; background: var(--meter-track); vertical-align: middle; }
 .split i { display: block; height: 100%; }
+.weekbox { border: 2px solid var(--border); border-radius: 2px; padding: 12px 14px 10px; margin: 0 0 20px; background: var(--panel); }
+.weekhead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 18px; }
+.weekhead h3 { margin: 0; }
+.weektot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 12px; color: var(--ink-soft); }
+.weektot .big { font-size: 26px; line-height: 1; color: var(--ink); }
+.weekcols { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.wcol { min-width: 0; text-align: center; font-size: 11px; }
+.wcol .wnum { font-size: 12px; font-weight: 750; height: 16px; white-space: nowrap; }
+.wcol .wbars { height: 84px; display: flex; flex-direction: column-reverse; justify-content: flex-start; border-bottom: 2px solid var(--border); }
+.wcol .wbars i { display: block; width: 100%; border-top: 1.5px solid var(--panel); min-height: 2px; }
+.wcol .wcx { height: 14px; margin-top: 4px; color: var(--ink-soft); white-space: nowrap; font-size: 10.5px; }
+.wcol .wcxbar { height: 5px; margin-top: 2px; background: var(--meter-track); border: 1.5px solid var(--border); border-radius: 1px; }
+.wcol .wcxbar i { display: block; height: 100%; background: var(--m4); }
+.wcol .wday { margin-top: 6px; line-height: 1.2; font-weight: 800; color: var(--ink); }
+.wcol .wday small { display: block; font-weight: 500; font-size: 10px; color: var(--muted); }
+.wcol.today .wday { border-top: 3px solid var(--border); margin-top: 3px; padding-top: 3px; }
+.wcol.zero .wnum, .wcol.zero .wcx { color: var(--muted); font-weight: 500; }
+.weekbox .wbar { margin-top: 18px; }
+.weekbox .fine { margin-top: 8px; }
+@media (max-width: 760px) { .weekbox { padding: 10px 10px 8px; } .weekcols { gap: 4px; } .wcol .wnum { font-size: 11px; } .wcol .wcx { font-size: 9.5px; } }
 .dcols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; margin-top: 6px; }
 .daynone { font-family: "Caveat", cursive; font-size: 21px; color: var(--muted); margin: 4px 0; }
 .cmp { font-size: 12px; color: var(--ink-soft); }
@@ -1084,6 +1104,50 @@ function dedupePrs(days) {
   return [...m.values()].sort((a, b) => b.linked - a.linked);
 }
 
+// The 7-day strip: totals per day, oldest left. Days 4 to 7 have no thread detail.
+function weekHtml(D) {
+  const W = D.week; if (!W || !W.length) return "";
+  const info = D.week_info || { total_w: 0, hits: [], cap: null };
+  const maxW = Math.max(1e-9, ...W.map((d) => d.total.w));
+  const maxCx = Math.max(1, ...W.map((d) => d.codex_tokens));
+  const totW = info.total_w || 0;
+  const peak = (d) => { let b = 0; d.hours.forEach((v, k) => { if (v > d.hours[b]) b = k; }); return d.hours[b] > 0 ? String(b).padStart(2, "0") + ":00" : ""; };
+  const cols = W.map((d, i) => {
+    const p = dayParts(d.day);
+    const today = i === W.length - 1;
+    const name = today ? "Today" : i === W.length - 2 ? "Yest." : p.short.slice(0, 3);
+    const date = p.short.split(" ").slice(1).join(" ");
+    const share = totW > 0 ? Math.round((d.total.w / totW) * 100) : 0;
+    const segs = d.fam.map((v, f) => (v > 0 ? `<i style="height:${((v / maxW) * 84).toFixed(1)}px;background:var(--m${f})"></i>` : "")).join("");
+    const fw = d.fam.reduce((a, b) => a + b, 0);
+    const mix = d.fam.map((v, f) => (v > 0 ? `${FAM[f]} ${Math.round((v / fw) * 100)}%` : "")).filter(Boolean).join(", ");
+    const tip = `<b>${p.wd} ${esc(date)}${today ? " (so far)" : ""}</b><br>${share}% of the week's weighted usage<br>${full(d.total.n)} requests, ${compact(d.total.t[1])} output tokens<br>` +
+      (mix ? mix + "<br>" : "") + (d.codex_tokens ? `GPT ${compact(d.codex_tokens)} tokens (no weight)<br>` : "") +
+      (d.active_min ? `active ${dur(d.active_min * 60000)}${peak(d) ? ", busiest hour " + peak(d) : ""}` : "no Claude activity") + (i < 4 ? "<br>totals only, no per-thread detail" : "");
+    const aria = `${p.wd} ${date}: ${share}% of the week, ${full(d.total.n)} requests` + (mix ? ", " + mix : "") + (d.codex_tokens ? `, GPT ${compact(d.codex_tokens)} tokens` : "");
+    return `<div class="wcol${today ? " today" : ""}${i < 4 ? " thin" : ""}${d.total.w > 0 ? "" : " zero"}" data-tip="${esc(tip)}" role="img" aria-label="${esc(aria)}">
+      <div class="wnum num">${d.total.w > 0 ? share + "%" : "none"}</div><div class="wbars">${segs}</div>
+      <div class="wcx num">${d.codex_tokens ? "GPT " + compact(d.codex_tokens) : "&nbsp;"}</div><div class="wcxbar">${d.codex_tokens ? `<i style="width:${((d.codex_tokens / maxCx) * 100).toFixed(1)}%"></i>` : ""}</div>
+      <div class="wday">${esc(name)}<small>${esc(date)}</small></div></div>`;
+  }).join("");
+  // Weekly total, and a cap line only when a weekly limit hit was recorded.
+  const cap = info.cap, famTot = [0, 0, 0, 0];
+  W.forEach((d) => d.fam.forEach((v, f) => { famTot[f] += v; }));
+  const plate = S.live && S.live.window && S.live.window.cap && S.live.window.cap.used > 0 ? totW / S.live.window.cap.used : 0;
+  let capHtml;
+  if (cap && cap > 0) {
+    const scaleMax = Math.max(1, totW / cap);
+    const segs = famTot.map((v, f) => (v > 0 ? `<i style="width:${((v / cap) / scaleMax * 100).toFixed(2)}%;background:var(--m${f})" data-tip="<b>${FAM[f]}</b>: ${((v / cap) * 100).toFixed(1)}% of the weekly cap"></i>` : "")).join("");
+    const hitAt = info.cap_hit ? dayParts(new Date(info.cap_hit + off() * 60000).toISOString().slice(0, 10)).short + " " + hhmm(info.cap_hit) : "";
+    capHtml = `<div class="wbar">${segs}<span class="capline" style="left:calc(${(100 / scaleMax).toFixed(2)}% - 1px)" data-tip="The 7-day usage at the last weekly limit hit"></span></div>
+      <p class="fine">This week is ${Math.round((totW / cap) * 100)}% of what the 7 days weighed when the weekly limit was last hit (${esc(hitAt)}). Estimated; claude.ai chat and other devices are invisible here.</p>`;
+  } else {
+    capHtml = `<p class="fine">No weekly limit hit is recorded in these 7 days, so there is no cap line. Claude Code marks weekly hits apart from 5-hour ones (limit type in the error line), so one will be drawn as soon as it is seen. Days 4 to 7 keep totals only.</p>`;
+  }
+  return `<div class="weekbox"><div class="weekhead"><h3>the week so far</h3><div class="weektot"><span class="big num">${compact(totW)}</span><span>weighted units, last 7 days</span>${plate >= 0.05 ? `<span data-tip="Weighted 7-day total divided by what the last 5-hour limit hit used">about ${plate.toFixed(1)} full 5-hour plates</span>` : ""}${info.codex_tokens ? `<span>GPT ${compact(info.codex_tokens)} tokens</span>` : ""}</div></div>
+    <div class="weekcols">${cols}</div>${capHtml}</div>`;
+}
+
 function renderDays(force) {
   const D = S.days; if (!D || !D.days) return;
   if (!force && S.rawDaysRendered === S.rawDays) return;
@@ -1095,7 +1159,7 @@ function renderDays(force) {
   const allFams = [0, 1, 2, 3, 4].filter((f) => days.some((d) => famsOf(d)[f] > 0));
   $("daysLegend").innerHTML = allFams.map((f) => `<span>${sw(f)}${FAM[f]}</span>`).join("");
 
-  let h = "";
+  let h = weekHtml(D);
   days.forEach((d, i) => {
     const p = dayParts(d.day);
     const out = d.total.t[1];

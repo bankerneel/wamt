@@ -13,6 +13,12 @@ pub const WINDOW_MS: i64 = 5 * MS_PER_HOUR;
 pub const WINDOW_GRID_MS: i64 = 10 * MS_PER_MIN;
 const MINUTES_KEPT_MS: i64 = 26 * MS_PER_HOUR;
 const HIT_DEDUPE_MS: i64 = 10 * MS_PER_MIN;
+/// Local days kept in all: today plus six. Only the newest `DETAIL_DAYS`
+/// keep per-session detail; older days are compacted to daily totals.
+pub const WEEK_DAYS: i32 = 7;
+pub const DETAIL_DAYS: i32 = 3;
+/// Dedupe keys of compacted days are cut to their low 32 bits.
+const SEEN_OLD_MASK: u64 = 0xFFFF_FFFF;
 
 /// Usage for one key: tokens, number of API responses, weighted units.
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -127,7 +133,40 @@ impl Default for DayAgg {
     }
 }
 
+/// One day of the weekly view: totals only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WeekDay {
+    pub day: i32,
+    pub total: Use,
+    /// Weighted units per model family.
+    pub fam: [f64; 4],
+    /// Weighted units per local hour (all families).
+    pub hours: Vec<f64>,
+    pub active_min: u32,
+}
+
 impl DayAgg {
+    /// Drops per-session detail, keeping models, hours and active time.
+    pub fn compact(&mut self) {
+        self.sessions = HashMap::new();
+        self.subs = BTreeMap::new();
+    }
+    pub fn is_compact(&self) -> bool {
+        self.sessions.is_empty() && self.subs.is_empty()
+    }
+    pub fn week_summary(&self, day: i32) -> WeekDay {
+        let mut fam = [0.0; 4];
+        for (m, u) in &self.models {
+            fam[family(m)] += u.w;
+        }
+        WeekDay {
+            day,
+            total: self.total(),
+            fam,
+            hours: self.hours.iter().map(|h| h.iter().sum()).collect(),
+            active_min: self.active_slots() * 5,
+        }
+    }
     pub fn active_slots(&self) -> u32 {
         self.active.iter().map(|w| w.count_ones()).sum()
     }
@@ -184,8 +223,15 @@ pub struct Agg {
     pub days: BTreeMap<i32, DayAgg>,
     /// Minute index (epoch ms / 60000) -> cell, for the last 26 hours.
     pub mins: BTreeMap<i64, MinCell>,
-    /// Limit hits (deduped), last 3 days.
+    /// Limit hits (deduped), last 7 days.
     pub hits: Vec<i64>,
+    /// Weekly-limit hits (deduped), last 7 days. Kept apart from `hits` so a
+    /// weekly cap never sets the 5-hour plate's reference.
+    #[serde(default)]
+    pub week_hits: Vec<i64>,
+    /// Weighted usage of the 7 days up to the latest weekly-limit hit.
+    #[serde(default)]
+    pub week_cap: Option<CapRef>,
     /// Kept past the 3-day window on purpose (one number).
     pub cap_ref: Option<CapRef>,
     /// The latest window worked out (start, end, from a recorded reset).
@@ -228,18 +274,29 @@ pub struct UsageIn<'a> {
 impl Agg {
     /// Adds one API response. Returns false when it was already counted.
     pub fn add_usage(&mut self, u: UsageIn, off: i32) -> bool {
+        self.add_usage_at(u, off, now_ms())
+    }
+
+    /// Like `add_usage`, with the current time given (the tailer's clock).
+    pub fn add_usage_at(&mut self, u: UsageIn, off: i32, now: i64) -> bool {
         let day = day_of(u.ts_ms, off);
+        // Days past the detail window keep a 32-bit dedupe key (see `prune`):
+        // enough to count a forked copy of old history once, at half the size.
+        let old = day <= day_of(now, off) - DETAIL_DAYS;
         if let Some(id) = u.msg_id {
             let h = fnv64(id);
-            if self.seen.contains_key(&h) {
+            let key = if old { h & SEEN_OLD_MASK } else { h };
+            if self.seen.contains_key(&h) || self.seen.contains_key(&key) {
                 return false;
             }
-            self.seen.insert(h, day);
+            self.seen.insert(key, day);
         }
         let w = if u.codex { 0.0 } else { weight(u.model, u.tokens, u.fast) };
         let fam = family(u.model);
         let d = self.days.entry(day).or_default();
         d.models.entry(u.model.to_string()).or_default().add(u.tokens, w);
+        // Days older than the detail window keep totals only.
+        let detail = day > day_of(now, off) - DETAIL_DAYS;
         if !u.codex {
             let hr = hour_of(u.ts_ms, off);
             d.hours[hr][fam] += w;
@@ -247,13 +304,18 @@ impl Agg {
             let slot = ((u.ts_ms - day_start_ms(day, off)) / (5 * MS_PER_MIN)).clamp(0, 287) as usize;
             d.active[slot / 64] |= 1u64 << (slot % 64);
         }
+        if !detail {
+            // Older than the minute cells anyway.
+            self.dirty = true;
+            return true;
+        }
         let s = d.sessions.entry(u.session.to_string()).or_default();
         s.models.entry(u.model.to_string()).or_default().add(u.tokens, w);
         if u.sub {
             s.sub.add(u.tokens, w);
         }
         // Timeline buckets are kept for the current local day only.
-        if day == day_of(now_ms(), off) {
+        if day == day_of(now, off) {
             let slot = ((u.ts_ms - day_start_ms(day, off)) / BUCKET_MS).clamp(0, 143) as u16;
             let b = s.buckets.entry(slot).or_default();
             b.w[fam] += w;
@@ -281,7 +343,10 @@ impl Agg {
         true
     }
 
-    pub fn add_subagent_file(&mut self, day: i32, parent: &str, label: &str) {
+    pub fn add_subagent_file(&mut self, day: i32, parent: &str, label: &str, off: i32, now: i64) {
+        if day <= day_of(now, off) - DETAIL_DAYS {
+            return;
+        }
         *self
             .days
             .entry(day)
@@ -305,10 +370,63 @@ impl Agg {
         true
     }
 
+    /// Records a weekly-limit hit unless one was recorded within 10 minutes.
+    pub fn add_weekly_hit(&mut self, ts_ms: i64) -> bool {
+        if self.week_hits.iter().any(|h| (h - ts_ms).abs() < HIT_DEDUPE_MS) {
+            return false;
+        }
+        self.week_hits.push(ts_ms);
+        self.week_hits.sort_unstable();
+        self.dirty = true;
+        true
+    }
+
+    /// Measures the 7 days up to the latest weekly-limit hit, when all 7 of
+    /// them are still held (the hit is from today). The hit day counts up to
+    /// the hit hour. Kept once measured, like the 5-hour reference.
+    pub fn refresh_week_cap(&mut self, now_ms: i64, off: i32) {
+        let Some(&h) = self.week_hits.last() else { return };
+        if self.week_cap.as_ref().is_some_and(|c| c.hit_ms >= h) {
+            return;
+        }
+        let hd = day_of(h, off);
+        if hd - (WEEK_DAYS - 1) < day_of(now_ms, off) - (WEEK_DAYS - 1) {
+            return;
+        }
+        let mut used = 0.0;
+        for d in hd - (WEEK_DAYS - 1)..=hd {
+            let Some(a) = self.days.get(&d) else { continue };
+            if d < hd {
+                used += a.hours.iter().map(|x| x.iter().sum::<f64>()).sum::<f64>();
+            } else {
+                let hr = hour_of(h, off);
+                used += a.hours.iter().take(hr + 1).map(|x| x.iter().sum::<f64>()).sum::<f64>();
+            }
+        }
+        if used > 0.0 {
+            self.week_cap = Some(CapRef { used, hit_ms: h, start_ms: day_start_ms(hd - (WEEK_DAYS - 1), off) });
+            self.dirty = true;
+        }
+    }
+
+    /// Weighted usage per local day for the last 7 days, oldest first.
+    pub fn week(&self, today: i32) -> Vec<WeekDay> {
+        (today - (WEEK_DAYS - 1)..=today)
+            .map(|d| self.days.get(&d).map_or_else(|| DayAgg::default().week_summary(d), |a| a.week_summary(d)))
+            .collect()
+    }
+
     /// Drops everything older than local day `min_day`, and minute cells
-    /// older than 26 hours.
+    /// older than 26 hours. Days past the detail window are compacted to
+    /// totals (sessions and subagent counts dropped).
     pub fn prune(&mut self, min_day: i32, now_ms: i64, off: i32) {
-        let before = (self.days.len(), self.mins.len(), self.seen.len(), self.hits.len());
+        let before = (self.days.len(), self.mins.len(), self.seen.len(), self.hits.len() + self.week_hits.len());
+        for (d, a) in self.days.iter_mut() {
+            if *d <= day_of(now_ms, off) - DETAIL_DAYS && !a.is_compact() {
+                a.compact();
+                self.dirty = true;
+            }
+        }
         // Day roll: yesterday's timeline buckets go (only today's are kept).
         let today = day_of(now_ms, off);
         for (d, a) in self.days.iter_mut() {
@@ -323,11 +441,18 @@ impl Agg {
         }
         self.days.retain(|d, _| *d >= min_day);
         self.seen.retain(|_, d| *d >= min_day);
+        let old_cut = today - DETAIL_DAYS;
+        if self.seen.iter().any(|(k, d)| *d <= old_cut && *k > SEEN_OLD_MASK) {
+            let seen = std::mem::take(&mut self.seen);
+            self.seen = seen.into_iter().map(|(k, d)| (if d <= old_cut { k & SEEN_OLD_MASK } else { k }, d)).collect();
+            self.dirty = true;
+        }
         let min_minute = (now_ms - MINUTES_KEPT_MS).div_euclid(MS_PER_MIN);
         self.mins.retain(|m, _| *m >= min_minute);
         let from = day_start_ms(min_day, off);
         self.hits.retain(|h| *h >= from);
-        if before != (self.days.len(), self.mins.len(), self.seen.len(), self.hits.len()) {
+        self.week_hits.retain(|h| *h >= from);
+        if before != (self.days.len(), self.mins.len(), self.seen.len(), self.hits.len() + self.week_hits.len()) {
             self.dirty = true;
         }
     }
@@ -509,12 +634,25 @@ mod seen_codec {
         Some(out)
     }
 
+    /// A day whose keys all fit 32 bits (a compacted day) is written as "4:"
+    /// plus 4-byte entries; any other day as 8-byte entries.
     pub fn serialize<S: Serializer>(m: &HashMap<u64, i32>, s: S) -> Result<S::Ok, S::Error> {
-        let mut by_day: BTreeMap<i32, Vec<u8>> = BTreeMap::new();
+        let mut by_day: BTreeMap<i32, Vec<u64>> = BTreeMap::new();
         for (h, d) in m {
-            by_day.entry(*d).or_default().extend_from_slice(&h.to_le_bytes());
+            by_day.entry(*d).or_default().push(*h);
         }
-        let enc: BTreeMap<i32, String> = by_day.into_iter().map(|(d, b)| (d, encode(&b))).collect();
+        let enc: BTreeMap<i32, String> = by_day
+            .into_iter()
+            .map(|(d, keys)| {
+                if keys.iter().all(|k| *k <= u32::MAX as u64) {
+                    let b: Vec<u8> = keys.iter().flat_map(|k| (*k as u32).to_le_bytes()).collect();
+                    (d, format!("4:{}", encode(&b)))
+                } else {
+                    let b: Vec<u8> = keys.iter().flat_map(|k| k.to_le_bytes()).collect();
+                    (d, encode(&b))
+                }
+            })
+            .collect();
         enc.serialize(s)
     }
 
@@ -522,9 +660,19 @@ mod seen_codec {
         let enc: BTreeMap<i32, String> = BTreeMap::deserialize(d)?;
         let mut m = HashMap::new();
         for (day, s) in enc {
-            let bytes = decode(&s).ok_or_else(|| serde::de::Error::custom("bad seen encoding"))?;
-            for c in bytes.chunks_exact(8) {
-                m.insert(u64::from_le_bytes(c.try_into().unwrap()), day);
+            let (narrow, body) = match s.strip_prefix("4:") {
+                Some(rest) => (true, rest),
+                None => (false, s.as_str()),
+            };
+            let bytes = decode(body).ok_or_else(|| serde::de::Error::custom("bad seen encoding"))?;
+            if narrow {
+                for c in bytes.chunks_exact(4) {
+                    m.insert(u32::from_le_bytes(c.try_into().unwrap()) as u64, day);
+                }
+            } else {
+                for c in bytes.chunks_exact(8) {
+                    m.insert(u64::from_le_bytes(c.try_into().unwrap()), day);
+                }
             }
         }
         Ok(m)
@@ -785,6 +933,157 @@ mod tests {
         // Already past the cap: empty now.
         a.cap_ref = Some(CapRef { used: 10.0 * per, hit_ms: 0, start_ms: 0 });
         assert_eq!(a.window(now, &[]).eta_ms, Some(now));
+    }
+
+    fn req(a: &mut Agg, session: &str, ts_ms: i64, model: &str, id: &str) -> bool {
+        let t = Tokens { output: 10, cache_w5m: 80_000, ..Default::default() };
+        a.add_usage(
+            UsageIn { session, sub: true, observer: false, ts_ms, model, tokens: &t, fast: false, msg_id: Some(id), prev_ms: ts_ms - 20 * MS_PER_MIN, codex: false },
+            OFF,
+        )
+    }
+
+    #[test]
+    fn days_four_to_seven_keep_totals_but_no_sessions() {
+        let mut a = Agg::default();
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        for back in 0..7 {
+            let ts = day_start_ms(today - back, OFF) + 4 * MS_PER_HOUR + 7 * MS_PER_MIN;
+            assert!(req(&mut a, "s1", ts, "claude-opus-5-5", &format!("m{back}")));
+            a.add_subagent_file(today - back, "s1", "Explore|claude-haiku-5-5", OFF, now);
+        }
+        for back in 0..7 {
+            let d = &a.days[&(today - back)];
+            // Totals, hourly cells and active time exist for every day.
+            assert_eq!(d.models["claude-opus-5-5"].n, 1);
+            assert!(d.hours[4][0] > 0.0 && d.hours_n[4] == 1 && d.active_slots() == 1);
+            if back < 3 {
+                assert_eq!(d.sessions["s1"].cold.n, 1, "day {back}");
+                assert_eq!(d.subs.len(), 1);
+            } else {
+                assert!(d.sessions.is_empty() && d.subs.is_empty(), "day {back}");
+            }
+        }
+        // Dropping detail never changes what the week says.
+        let w = a.week(today);
+        assert_eq!(w.len(), 7);
+        assert!(w.iter().all(|d| d.total.n == 1 && d.active_min == 5 && d.hours[4] > 0.0));
+    }
+
+    #[test]
+    fn a_day_is_compacted_when_it_ages_past_day_three() {
+        let mut a = Agg::default();
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        let ts = day_start_ms(today, OFF) + 2 * MS_PER_HOUR;
+        req(&mut a, "s1", ts, "claude-sonnet-5-5", "x");
+        req(&mut a, "s2", ts + MS_PER_MIN, "claude-haiku-5-5", "y");
+        let before = a.days[&today].total();
+        assert_eq!(a.days[&today].sessions.len(), 2);
+        // Two days later it is day 3: still detailed. Three days later: compact.
+        a.prune(today - 4, now + 2 * 24 * MS_PER_HOUR, OFF);
+        assert_eq!(a.days[&today].sessions.len(), 2);
+        a.prune(today - 3, now + 3 * 24 * MS_PER_HOUR, OFF);
+        let d = &a.days[&today];
+        assert!(d.sessions.is_empty() && d.subs.is_empty());
+        assert_eq!(d.total(), before);
+        assert_eq!(d.models.len(), 2);
+        assert!(d.hours[2][1] > 0.0 && d.hours[2][2] > 0.0);
+        assert_eq!(d.active_slots(), 1);
+        assert!(a.dirty);
+    }
+
+    #[test]
+    fn seven_day_prune_keeps_today_and_six_back() {
+        let mut a = Agg::default();
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        for back in 0..9 {
+            let ts = day_start_ms(today - back, OFF) + 5 * MS_PER_HOUR;
+            req(&mut a, "s1", ts, "claude-opus-5-5", &format!("p{back}"));
+        }
+        let h_old = day_start_ms(today - 8, OFF);
+        let h_ok = day_start_ms(today - 6, OFF) + MS_PER_HOUR;
+        a.hits = vec![h_old, h_ok];
+        a.week_hits = vec![h_old, h_ok];
+        a.prune(today - (WEEK_DAYS - 1), now, OFF);
+        assert_eq!(a.days.len(), 7);
+        assert!(a.days.contains_key(&(today - 6)) && !a.days.contains_key(&(today - 7)));
+        assert_eq!(a.seen.len(), 7);
+        assert_eq!(a.hits, vec![h_ok]);
+        assert_eq!(a.week_hits, vec![h_ok]);
+    }
+
+    #[test]
+    fn four_extra_busy_days_add_little_to_the_cache() {
+        let busy = |days: i32| {
+            let mut a = Agg::default();
+            let now = now_ms();
+            let today = day_of(now, OFF);
+            // Days of 3,000 requests each, over 12 sessions a day.
+            for back in 0..days {
+                for i in 0..3000i64 {
+                    let ts = day_start_ms(today - back, OFF) + (i % 1400) * MS_PER_MIN;
+                    req(&mut a, &format!("sess{}", i % 12), ts, "claude-opus-5-5", &format!("d{back}-{i}"));
+                }
+            }
+            a.prune(today - 6, now, OFF);
+            (serde_json::to_string(&a).unwrap().len(), seen_codec_probe(&a).values().sum::<usize>(), a, today)
+        };
+        let (three, _, _, _) = busy(3);
+        let (seven, seen, a, today) = busy(7);
+        // Four compact days of 3,000 requests: 4-byte keys (x 4/3 in base64)
+        // and almost nothing else.
+        let extra = seven - three;
+        assert!(extra < 75_000, "days 4 to 7 add {extra} bytes");
+        assert!(extra > 4 * 3000 * 4 * 4 / 3, "sanity: {extra}");
+        // With 8-byte keys they would have added about 130 KB for the keys alone.
+        assert!(seen < 3 * 3000 * 11 + 4 * 3000 * 6, "dedupe sets are {seen} bytes");
+        let compact = serde_json::to_string(&a.days[&(today - 5)]).unwrap().len();
+        assert!(compact < 3_000, "a compacted day is {compact} bytes");
+    }
+
+    /// Just the dedupe set, as the cache writes it.
+    fn seen_codec_probe(a: &Agg) -> BTreeMap<i32, usize> {
+        let mut m = BTreeMap::new();
+        let js = serde_json::to_value(a).unwrap();
+        for (d, v) in js["seen"].as_object().unwrap() {
+            m.insert(d.parse().unwrap(), v.as_str().unwrap().len());
+        }
+        m
+    }
+
+    #[test]
+    fn compacted_days_dedupe_forked_copies_at_half_the_size() {
+        let mut a = Agg::default();
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        let old = day_start_ms(today - 5, OFF) + 3 * MS_PER_HOUR;
+        let recent = day_start_ms(today, OFF) + 3 * MS_PER_HOUR;
+        assert!(req(&mut a, "s1", old, "claude-opus-5-5", "old-1"));
+        assert!(req(&mut a, "s1", recent, "claude-opus-5-5", "new-1"));
+        a.prune(today - 6, now, OFF);
+        // A forked file replays the same ids: counted once, before and after a cache round trip.
+        let js = serde_json::to_string(&a).unwrap();
+        let mut b: Agg = serde_json::from_str(&js).unwrap();
+        assert!(!req(&mut b, "s2", old, "claude-opus-5-5", "old-1"));
+        assert!(!req(&mut b, "s2", recent, "claude-opus-5-5", "new-1"));
+        assert!(req(&mut b, "s2", old, "claude-opus-5-5", "old-2"));
+        assert_eq!(b.days[&(today - 5)].models["claude-opus-5-5"].n, 2);
+        // The old day's key is 4 bytes wide on disk (4:xxxx), the recent one 8.
+        let v: serde_json::Value = serde_json::from_str(&js).unwrap();
+        let o = v["seen"][(today - 5).to_string()].as_str().unwrap();
+        let r = v["seen"][today.to_string()].as_str().unwrap();
+        assert!(o.starts_with("4:") && o.len() == 2 + 8 && r.len() == 12, "{o} {r}");
+    }
+
+    #[test]
+    fn weekly_hits_dedupe_and_stay_apart_from_five_hour_hits() {
+        let mut a = Agg::default();
+        assert!(a.add_weekly_hit(1_000_000_000_000));
+        assert!(!a.add_weekly_hit(1_000_000_000_000 + MS_PER_MIN));
+        assert!(a.hits.is_empty());
     }
 
     #[test]

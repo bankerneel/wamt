@@ -56,9 +56,14 @@ pub struct TailCache {
     pub files: HashMap<String, FileRec>,
     pub sessions: HashMap<String, SessionInfo>,
     pub agg: Agg,
+    /// Files untouched since before this time are not listed in `files`: they
+    /// were read to the end already, and are skipped on restore (a file that
+    /// is written again is read from the start; its lines are deduped).
+    #[serde(default)]
+    pub quiet_before: i64,
 }
 
-pub const CACHE_VERSION: u32 = 5;
+pub const CACHE_VERSION: u32 = 6;
 
 #[derive(Default, Clone, Debug, Serialize)]
 pub struct TailStats {
@@ -92,6 +97,11 @@ pub struct Tailer {
     pub new_hits: Vec<i64>,
     /// Folders seen in the last listing, with their mtimes.
     dirs: HashMap<PathBuf, i64>,
+    /// Restored from the cache: untracked files not touched since this time
+    /// were already read to the end (see `TailCache::quiet_before`).
+    quiet_before: i64,
+    /// Files last written before this are left out of the cache (0 = keep all).
+    keep_from: i64,
 }
 
 /// What a path is, judged from where it sits under the root.
@@ -175,6 +185,8 @@ impl Tailer {
             woke: Vec::new(),
             new_hits: Vec::new(),
             dirs: HashMap::new(),
+            quiet_before: 0,
+            keep_from: 0,
         }
     }
 
@@ -193,6 +205,7 @@ impl Tailer {
         }
         self.sessions = c.sessions;
         self.agg = c.agg;
+        self.quiet_before = c.quiet_before;
         true
     }
 
@@ -203,10 +216,12 @@ impl Tailer {
             files: self
                 .files
                 .iter()
+                .filter(|(_, t)| t.rec.mtime >= self.keep_from)
                 .filter_map(|(p, t)| p.strip_prefix(&self.root).ok().and_then(|r| r.to_str()).map(|s| (s, &t.rec)))
                 .collect(),
             sessions: &self.sessions,
             agg: &self.agg,
+            quiet_before: self.keep_from.max(self.quiet_before),
         }
     }
 
@@ -296,7 +311,7 @@ impl Tailer {
                     continue;
                 }
                 let Ok(meta) = fs::metadata(&path) else { continue };
-                if mtime_ms(&meta) < window_start_ms {
+                if mtime_ms(&meta) < window_start_ms.max(self.quiet_before) {
                     continue;
                 }
                 let Some((session, sub, obs)) = classify(&self.root, &path) else { continue };
@@ -327,7 +342,7 @@ impl Tailer {
             let mt = mtime_ms(&meta);
             present.insert(path.clone());
             if !self.files.contains_key(&path) {
-                if mt < window_start_ms {
+                if mt < window_start_ms.max(self.quiet_before) {
                     continue;
                 }
                 let Some((session, sub, obs)) = classify(&self.root, &path) else { continue };
@@ -339,6 +354,7 @@ impl Tailer {
         // Forget files that vanished or fell out of the window.
         let before = self.files.len();
         self.files.retain(|p, t| present.contains(p) && t.rec.mtime >= window_start_ms);
+        // The next cache write may leave the quiet files out.
         changed |= before != self.files.len();
         self.stats.files = self.files.len();
         self.stats.scans += 1;
@@ -347,10 +363,14 @@ impl Tailer {
         changed
     }
 
-    /// Forgets sessions that are outside the window and no longer tracked,
-    /// so the map (and the cache) never grows past three days of sessions.
+    /// Forgets sessions that are outside the detail window (three days) and
+    /// have no file written inside it, so the map (and the cache) never grows
+    /// past three days of sessions. Also marks which file records the cache
+    /// keeps: only files written inside the detail window.
     pub fn prune_sessions(&mut self, window_start_ms: i64) {
-        let tracked: std::collections::HashSet<&str> = self.files.values().map(|t| t.session.as_str()).collect();
+        self.keep_from = window_start_ms;
+        let tracked: std::collections::HashSet<&str> =
+            self.files.values().filter(|t| t.rec.mtime >= window_start_ms).map(|t| t.session.as_str()).collect();
         self.sessions.retain(|id, s| s.last >= window_start_ms || tracked.contains(id.as_str()));
     }
 
@@ -471,7 +491,10 @@ impl Tailer {
                 true
             }
             LineKind::RateLimit => {
-                if in_window && self.agg.add_limit_hit(l.ts_ms) {
+                // A weekly-limit hit is kept apart: it must not set the
+                // 5-hour plate's cap reference.
+                let added = in_window && if l.weekly { self.agg.add_weekly_hit(l.ts_ms) } else { self.agg.add_limit_hit(l.ts_ms) };
+                if added {
                     self.new_hits.push(l.ts_ms);
                     true
                 } else {
@@ -484,7 +507,7 @@ impl Tailer {
                 }
                 let model = l.model.as_deref().unwrap_or("unknown");
                 let was_idle = now_ms - s.last > 10 * MS_PER_MIN;
-                let counted = self.agg.add_usage(
+                let counted = self.agg.add_usage_at(
                     UsageIn {
                         session: &t.session,
                         sub: t.sub,
@@ -498,9 +521,12 @@ impl Tailer {
                         codex: false,
                     },
                     self.off,
+                    now_ms,
                 );
+                // Also for replayed lines (a file re-read after the cache
+                // dropped it): the next request is judged against them.
+                t.rec.prev = t.rec.prev.max(l.ts_ms);
                 if counted {
-                    t.rec.prev = t.rec.prev.max(l.ts_ms);
                     if l.ts_ms >= s.last {
                         s.last = l.ts_ms;
                         s.model = Some(model.to_string());
@@ -511,7 +537,7 @@ impl Tailer {
                     if t.sub && !t.rec.sc {
                         t.rec.sc = true;
                         let label = format!("{}|{}", t.agent_type.as_deref().unwrap_or("agent"), model);
-                        self.agg.add_subagent_file(day_of(l.ts_ms, self.off), &t.session, &label);
+                        self.agg.add_subagent_file(day_of(l.ts_ms, self.off), &t.session, &label, self.off, now_ms);
                     }
                 }
                 counted
@@ -529,12 +555,13 @@ pub struct TailCacheRef<'a> {
     pub files: HashMap<&'a str, &'a FileRec>,
     pub sessions: &'a HashMap<String, SessionInfo>,
     pub agg: &'a Agg,
+    pub quiet_before: i64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::timeutil::parse_ts_ms;
+    use crate::timeutil::{day_start_ms, parse_ts_ms};
     use std::io::Write;
 
     fn tmp(name: &str) -> PathBuf {
@@ -623,6 +650,90 @@ mod tests {
         t2.full_scan(ws, now);
         // a4: 30 min after a3 with 1h writes, warm. b2: 28 min, 5m writes, cold.
         assert_eq!(cold_of(&t2, "s1"), (2, 140_000));
+    }
+
+    #[test]
+    fn cold_start_reads_seven_days_and_keeps_detail_for_three() {
+        let root = tmp("week");
+        let f = root.join("-Users-x-projects-demo/s1.jsonl");
+        // NOW is 17 Nov 16:00 UTC (21:30 IST). Lines on 17, 16, 15, 14, 13, 12, 11 Nov
+        // (IST days) and one older than the week.
+        let days = ["17", "16", "15", "14", "13", "12", "11", "10"];
+        for (i, d) in days.iter().enumerate() {
+            append(&f, &line(&format!("w{i}"), &format!("2026-11-{d}T10:00:00Z"), 10));
+        }
+        let now = parse_ts_ms(NOW).unwrap();
+        let today = day_of(now, 330);
+        let ws = day_start_ms(today - 6, 330);
+        let mut t = Tailer::new(root.clone(), 330);
+        t.full_scan(ws, now);
+        assert_eq!(t.agg.days.len(), 7, "the 10 Nov line is outside the week");
+        for back in 0..7 {
+            let d = &t.agg.days[&(today - back)];
+            assert_eq!(d.total().t.output, 10);
+            assert_eq!(d.sessions.len(), if back < 3 { 1 } else { 0 }, "day {back}");
+        }
+        // The cache stays valid through a restart and a later prune.
+        let js = serde_json::to_string(&t.to_cache()).unwrap();
+        let mut t2 = Tailer::new(root.clone(), 330);
+        assert!(t2.restore(serde_json::from_str(&js).unwrap()));
+        t2.agg.prune(today - 6, now, 330);
+        assert_eq!(t2.agg.days.len(), 7);
+        assert_eq!(t2.agg.seen.len(), 7);
+    }
+
+    #[test]
+    fn weekly_limit_lines_go_to_their_own_list() {
+        let root = tmp("weekly");
+        let f = root.join("-Users-x-projects-demo/s1.jsonl");
+        let lim = |kind: &str, ts: &str| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"{ts}","isApiErrorMessage":true,"error":"rate_limit","quotaLimits":{{"rateLimitType":"{kind}"}},"message":{{"id":"x","model":"<synthetic>","usage":{{"input_tokens":0,"output_tokens":0}}}}}}"#
+            ) + "\n"
+        };
+        append(&f, &lim("five_hour", "2026-11-17T10:00:00Z"));
+        append(&f, &lim("seven_day", "2026-11-17T12:00:00Z"));
+        let (ws, now) = (parse_ts_ms(START).unwrap(), parse_ts_ms(NOW).unwrap());
+        let mut t = Tailer::new(root.clone(), 330);
+        t.full_scan(ws, now);
+        assert_eq!(t.agg.hits, vec![parse_ts_ms("2026-11-17T10:00:00Z").unwrap()]);
+        assert_eq!(t.agg.week_hits, vec![parse_ts_ms("2026-11-17T12:00:00Z").unwrap()]);
+    }
+
+    #[test]
+    fn cache_leaves_out_files_older_than_the_detail_window() {
+        let root = tmp("quiet");
+        let old = root.join("-Users-x-projects-demo/old.jsonl");
+        let new = root.join("-Users-x-projects-demo/new.jsonl");
+        append(&old, &line("o1", "2026-11-12T10:00:00Z", 10));
+        append(&new, &line("n1", "2026-11-17T15:00:00Z", 20));
+        let when = |ts: &str| std::time::UNIX_EPOCH + std::time::Duration::from_millis(parse_ts_ms(ts).unwrap() as u64);
+        File::options().write(true).open(&old).unwrap().set_modified(when("2026-11-12T10:00:00Z")).unwrap();
+        File::options().write(true).open(&new).unwrap().set_modified(when("2026-11-17T15:00:00Z")).unwrap();
+        let now = parse_ts_ms(NOW).unwrap();
+        let today = day_of(now, 330);
+        let (ws, ds) = (day_start_ms(today - 6, 330), day_start_ms(today - 2, 330));
+        let mut t = Tailer::new(root.clone(), 330);
+        t.full_scan(ws, now);
+        t.prune_sessions(ds);
+        assert_eq!(t.agg.days.len(), 2);
+        let js = serde_json::to_string(&t.to_cache()).unwrap();
+        let c: TailCache = serde_json::from_str(&js).unwrap();
+        assert_eq!(c.files.len(), 1, "only the file written in the last three days is listed");
+        assert_eq!(c.quiet_before, ds);
+        assert_eq!(c.sessions.len(), 1);
+        // Restored: the old file is not read again; the totals do not move.
+        let mut t2 = Tailer::new(root.clone(), 330);
+        assert!(t2.restore(c));
+        t2.full_scan(ws, now);
+        assert_eq!(t2.files.len(), 1);
+        assert_eq!(out_today(&t2), 30);
+        // Written to again, it is read from the start: the old line is
+        // deduped and only the new one counts.
+        append(&old, &line("o2", "2026-11-17T15:30:00Z", 5));
+        t2.full_scan(ws, now);
+        assert_eq!(out_today(&t2), 35);
+        assert_eq!(t2.agg.days[&(today - 5)].models["claude-opus-5-5"].n, 1);
     }
 
     #[test]
