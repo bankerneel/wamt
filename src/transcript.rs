@@ -69,9 +69,10 @@ pub fn family(model: &str) -> usize {
 
 /// List price in USD per million tokens: (input, output, cache read).
 /// Source: the Claude model table (Opus 5.5, Sonnet 5.5, Haiku 5.5), which
-/// matches T3's own rate file. Used only as relative weights for the 5-hour
-/// limit estimate; no dollar figure is ever shown.
-fn price(model: &str) -> (f64, f64, f64) {
+/// matches T3's own rate file. Used as relative weights for the 5-hour
+/// limit estimate, and by the bill's optional API-equivalent view (sent to
+/// the page with the days, so the page never keeps its own copy).
+pub fn price(model: &str) -> (f64, f64, f64) {
     let m = model;
     if m.contains("fable") || m.contains("mythos") {
         if m.contains("5-2") {

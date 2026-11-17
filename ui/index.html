@@ -293,6 +293,7 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .state.merged { color: var(--good); } .state.open { color: var(--ink-soft); }
 
 /* The bill */
+.billctl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .tabs { display: inline-flex; border: 2px solid var(--border); border-radius: 2px; overflow: hidden; box-shadow: 3px 3px 0 var(--shadow); }
 .tabs button { background: var(--panel); border: 0; padding: 4px 11px; cursor: pointer; font-size: 12px; font-weight: 700; color: var(--ink-soft); }
 .tabs button + button { border-left: 2px solid var(--border); }
@@ -437,7 +438,7 @@ footer b { font-weight: 800; }
   </section>
 
   <section class="plate bill" aria-labelledby="h-ledger">
-    <div class="chart-head"><h2 class="ticket t-sage" id="h-ledger">The bill</h2><div class="tabs" role="tablist" id="ledgerTabs"></div></div>
+    <div class="chart-head"><h2 class="ticket t-sage" id="h-ledger">The bill</h2><div class="billctl"><button class="iconbtn" type="button" id="apiBtn" aria-pressed="false" title="Show each row at API list prices, as an estimate">API prices</button><div class="tabs" role="tablist" id="ledgerTabs"></div></div></div>
     <div id="ledger"></div>
   </section>
 
@@ -1257,6 +1258,15 @@ function renderDays(force) {
 }
 
 // ------------------------------------------------------------------ ledger
+(function apiToggle() {
+  try { S.apiPrices = localStorage.getItem("wamt-api") === "1"; } catch (_) {}
+  if (new URLSearchParams(location.search).has("api")) S.apiPrices = true;
+  $("apiBtn").addEventListener("click", () => {
+    S.apiPrices = !S.apiPrices;
+    try { localStorage.setItem("wamt-api", S.apiPrices ? "1" : "0"); } catch (_) {}
+    renderLedger();
+  });
+})();
 function renderLedger() {
   const D = S.days; if (!D || !D.days) return;
   const tabs = $("ledgerTabs");
@@ -1267,14 +1277,25 @@ function renderLedger() {
   if (!d || !d.total.n) { $("ledger").innerHTML = `<p class="muted">Nothing on the bill for this day.</p>`; return; }
   const totalW = d.total.w || 1;
   const hit = (t) => { const inAll = t[0] + t[2] + t[3] + t[4]; return inAll ? Math.round((t[2] / inAll) * 100) + "%" : ""; };
-  const row = (label, u, extra) => `<tr><td>${label}${extra || ""}</td><td>${full(u.n)}</td><td>${compact(u.t[0])}</td><td>${compact(u.t[2])}</td><td>${compact(u.t[3] + u.t[4])}</td><td>${compact(u.t[1])}</td><td>${hit(u.t)}</td><td>${u.w > 0 || !u.n ? Math.round((u.w / totalW) * 100) + "%" : '<span data-tip="Codex has no list price here, so no share">n/a</span>'}</td></tr>`;
-  const head = `<thead><tr><th></th><th>Requests</th><th>Input</th><th>Cache read</th><th>Cache write</th><th>Output</th><th>Cache hits</th><th data-tip="Share of the day's usage, weighting each model by its list price">Share</th></tr></thead>`;
+  // API view: weights are list prices per million tokens times tokens, so
+  // dollars are weight / 1e6. Rates come from the server with the days.
+  const api = S.apiPrices;
+  const btn = $("apiBtn"); btn.setAttribute("aria-pressed", api ? "true" : "false");
+  const usd = (w) => { const v = w / 1e6; return "$" + v.toLocaleString("en-US", { minimumFractionDigits: v < 100 ? 2 : 0, maximumFractionDigits: v < 100 ? 2 : 0 }); };
+  const lastCol = (u) => u.w > 0 || !u.n ? (api ? usd(u.w) : Math.round((u.w / totalW) * 100) + "%") : '<span data-tip="Codex has no list price here, so no share or cost">n/a</span>';
+  const row = (label, u, extra) => `<tr><td>${label}${extra || ""}</td><td>${full(u.n)}</td><td>${compact(u.t[0])}</td><td>${compact(u.t[2])}</td><td>${compact(u.t[3] + u.t[4])}</td><td>${compact(u.t[1])}</td><td>${hit(u.t)}</td><td>${lastCol(u)}</td></tr>`;
+  const rates = Object.entries(D.prices || {}).map(([m, p]) => `<b>${esc(modelName(m))}</b>: $${p[0]} in, $${p[1]} out, $${p[2]} cache read`).join("<br>");
+  const lastHead = api
+    ? `<th data-tip="${esc("API list prices per million tokens:<br>" + rates + "<br>Cache writes cost 1.25x input (5 min) or 2x (1 hour); fast mode 2x.")}">API cost</th>`
+    : `<th data-tip="Share of the day's usage, weighting each model by its list price">Share</th>`;
+  const head = `<thead><tr><th></th><th>Requests</th><th>Input</th><th>Cache read</th><th>Cache write</th><th>Output</th><th>Cache hits</th>${lastHead}</tr></thead>`;
   const models = Object.entries(d.models).sort((a, b) => b[1].w - a[1].w);
   let h = `<div class="tablewrap"><table>${head}<tbody>` + models.map(([m, u]) => row(chip(m), u)).join("") + `</tbody><tfoot>${row("Total", d.total)}</tfoot></table></div>`;
   h += `<h3>itemised, by thread and session</h3><div class="tablewrap"><table>${head.replace("<th></th>", "<th>Where</th>")}<tbody>` +
     d.sources.map((s) => row(esc(s.label), s.total, `<span class="apptag">${esc(APPS[s.app] || s.app)}</span>` + (s.cold && s.cold.n ? `<span class="apptag cold" data-tip="${esc(COLD_TIP)}">${s.cold.n} cold restart${s.cold.n === 1 ? "" : "s"}, ${compact(s.cold.tok)} rebuilt</span>` : ""))).join("") + `</tbody></table></div>` +
     (d.sources_more ? `<p class="fine">${d.sources_more} smaller sources are not listed.</p>` : "") +
     (models.some(([m]) => family(m) === 4) ? `<p class="fine">Codex rows count tokens only: no GPT prices are assumed, so they get no share, and Codex does not count toward Claude's limit.</p>` : "") +
+    (api ? `<p class="fine">API-equivalent, estimated: what these tokens would cost at API list prices. Your plan is not billed this way.</p>` : "") +
     '<p class="norefunds">no refunds.</p>';
   $("ledger").innerHTML = h;
 }
@@ -1283,7 +1304,7 @@ function renderLedger() {
 function renderFoot() {
   const L = S.live; if (!L) return;
   const h = L.health;
-  $("foot").innerHTML = `<span>Reads T3 and Claude Code files read-only.</span>
+  $("foot").innerHTML = `<span>Reads T3, Claude Code and Codex files read-only.</span>
     <span>T3 event <span class="num">${full(h.seq)}</span>, ${full(h.files)} transcript files tracked, ${h.launch_links} launch links.</span>
     <span>This dashboard itself: <b>${(h.mem / 1048576).toFixed(1)} MB</b> memory, ${h.cpu}% CPU, up ${dur(h.uptime * 1000)}.</span>`;
 }

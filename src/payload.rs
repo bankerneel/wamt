@@ -665,6 +665,10 @@ struct Days<'a> {
     days: Vec<DayOut<'a>>,
     week: &'a [WeekDayOut],
     week_info: &'a WeekInfo,
+    /// USD per million tokens (input, output, cache read) for each priced
+    /// model in these days; the bill's API-equivalent view explains itself
+    /// with these. Unpriced (Codex) models are left out.
+    prices: BTreeMap<String, [f64; 3]>,
 }
 
 fn app_key(a: App) -> &'static str {
@@ -879,7 +883,16 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
             cold: cold_day,
         });
     }
-    serde_json::to_string(&Days { now, days, week: &sh.tx.week.days, week_info: &sh.tx.week.info }).unwrap_or_else(|_| "{}".into())
+    let mut prices = BTreeMap::new();
+    for d in &days {
+        for (m, u) in &d.models {
+            if u.w > 0.0 && !prices.contains_key(m) {
+                let (i, o, r) = crate::transcript::price(m);
+                prices.insert(m.clone(), [i, o, r]);
+            }
+        }
+    }
+    serde_json::to_string(&Days { now, days, week: &sh.tx.week.days, week_info: &sh.tx.week.info, prices }).unwrap_or_else(|_| "{}".into())
 }
 
 #[cfg(test)]
