@@ -1,0 +1,497 @@
+//! Switchboard: a small, local, live dashboard for T3 Code threads and
+//! Claude Code usage. Read-only on its sources; binds to 127.0.0.1.
+
+mod agg;
+mod feed;
+mod http;
+mod hub;
+mod payload;
+mod state;
+mod sys;
+mod t3;
+mod tail;
+mod timeutil;
+mod transcript;
+
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::net::TcpListener;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+use crate::agg::DayAgg;
+use crate::feed::FeedBuilder;
+use crate::hub::Hub;
+use crate::payload::{compose_days, compose_live, Shared, T3Part};
+use crate::timeutil::{day_of, day_start_ms, now_ms, MS_PER_MIN};
+
+const UI: &str = include_str!("../ui/index.html");
+
+struct Config {
+    bind: String,
+    t3_db: PathBuf,
+    claude_root: PathBuf,
+    state_dir: PathBuf,
+    ui: Option<PathBuf>,
+    extra_hosts: Vec<String>,
+    off: i32,
+}
+
+fn env_or(key: &str, default: impl Into<String>) -> String {
+    std::env::var(key).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.into())
+}
+
+fn config() -> Config {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    Config {
+        bind: env_or("SWITCHBOARD_BIND", "127.0.0.1:7317"),
+        t3_db: env_or("SWITCHBOARD_T3_DB", format!("{home}/.t3/userdata/statev2.sqlite")).into(),
+        claude_root: env_or("SWITCHBOARD_CLAUDE_ROOT", format!("{home}/.claude/projects")).into(),
+        state_dir: env_or("SWITCHBOARD_STATE", ".state").into(),
+        ui: std::env::var("SWITCHBOARD_UI").ok().filter(|v| !v.is_empty()).map(PathBuf::from),
+        extra_hosts: env_or("SWITCHBOARD_ALLOW_HOSTS", "")
+            .split(',')
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        off: timeutil::local_offset_min(),
+    }
+}
+
+fn log(msg: impl AsRef<str>) {
+    eprintln!("{} {}", timeutil::iso_ms(now_ms()), msg.as_ref());
+}
+
+fn publish_live(shared: &Mutex<Shared>, hub: &Hub) {
+    let json = {
+        let mut sh = shared.lock().unwrap();
+        compose_live(&mut sh, now_ms())
+    };
+    hub.set_live(json);
+}
+
+fn publish_days(shared: &Mutex<Shared>, hub: &Hub, force: bool) {
+    let now = now_ms();
+    let json = {
+        let mut sh = shared.lock().unwrap();
+        if !force && now - sh.last_days_json < 2000 {
+            return;
+        }
+        sh.last_days_json = now;
+        compose_days(&sh, now)
+    };
+    hub.set_days(json);
+}
+
+// ------------------------------------------------------------ T3 worker
+
+#[derive(Serialize, Deserialize, Default)]
+struct LaunchCache {
+    v: u32,
+    launch: HashMap<String, String>,
+    checked: HashSet<String>,
+}
+
+fn t3_worker(cfg_db: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hub: Arc<Hub>) {
+    let cache_path = state_dir.join("t3.json");
+    let mut first_open = true;
+    loop {
+        let mut t3 = match t3::T3::open(&cfg_db) {
+            Ok(t) => t,
+            Err(e) => {
+                if first_open {
+                    log(format!("T3 database unavailable: {e}"));
+                    first_open = false;
+                }
+                shared.lock().unwrap().t3_error = Some(e);
+                publish_live(&shared, &hub);
+                thread::sleep(Duration::from_secs(10));
+                continue;
+            }
+        };
+        first_open = true;
+        let problems = t3.schema_problems();
+        if !problems.is_empty() {
+            log(format!("T3 schema changed: {}", problems.join("; ")));
+            {
+                let mut sh = shared.lock().unwrap();
+                sh.t3_problems = problems;
+                sh.t3 = None;
+            }
+            publish_live(&shared, &hub);
+            publish_days(&shared, &hub, true);
+            thread::sleep(Duration::from_secs(60));
+            continue;
+        }
+        shared.lock().unwrap().t3_problems.clear();
+        if let Err(e) = run_t3(&mut t3, &cache_path, &shared, &hub) {
+            log(format!("T3 read error, reconnecting: {e}"));
+            shared.lock().unwrap().t3_error = Some(e.to_string());
+            thread::sleep(Duration::from_secs(3));
+        }
+    }
+}
+
+fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hub: &Arc<Hub>) -> rusqlite::Result<()> {
+    let off = shared.lock().unwrap().off;
+    let t0 = std::time::Instant::now();
+    let mut cache_dirty = false;
+    if let Some(c) = state::load::<LaunchCache>(cache_path) {
+        if c.v == 1 {
+            t3.launch = c.launch;
+            t3.launch_checked = c.checked;
+        }
+    }
+    t3.begin()?;
+    t3.load_threads(None)?;
+    t3.load_sessions()?;
+    t3.end();
+    if t3.launch.is_empty() {
+        log("first start: matching launched threads to their launchers (one pass, a few seconds)");
+        t3.begin()?;
+        let n = t3.full_launch_scan()?;
+        t3.load_threads(None)?;
+        t3.end();
+        log(format!("found {n} launch links"));
+        cache_dirty = true;
+    }
+
+    // Seed the feed from recent history.
+    let mut feed = FeedBuilder::default();
+    t3.begin()?;
+    let max = t3.max_seq()?;
+    let seed = t3.events_since((max - 6000).max(0), 6000)?;
+    t3.end();
+    let items: Vec<(String, String)> = seed
+        .iter()
+        .filter_map(|ev| feed.on_event(ev, &t3.threads))
+        .map(|it| (it.id.clone(), serde_json::to_string(&it).unwrap_or_default()))
+        .collect();
+    hub.push_feed(items);
+    let mut last_event_ms = seed.last().map(|e| e.ts).unwrap_or(0);
+
+    let mut threads_arc = Arc::new(t3.threads.clone());
+    let mut sessions_arc = Arc::new(t3.session_thread.clone());
+    let mut runs = Vec::new();
+    let mut subs = Vec::new();
+    let mut active = Vec::new();
+    let mut waiting = Vec::new();
+    let mut ctx: HashMap<String, t3::Ctx> = HashMap::new();
+    let (mut last_full, mut last_subs, mut last_runs, mut last_live, mut last_launch) = (0i64, 0i64, 0i64, 0i64, 0i64);
+    let mut force = true;
+    let mut runs_pending = true;
+    log(format!("T3 ready in {} ms: {} threads, {} sessions mapped", t0.elapsed().as_millis(), t3.threads.len(), t3.session_thread.len()));
+
+    loop {
+        let now = now_ms();
+        let window_start = day_start_ms(day_of(now, off) - 2, off);
+        t3.begin()?;
+        let seq = t3.max_seq()?;
+        let mut live_dirty = force;
+        let mut days_dirty = force;
+        let mut threads_dirty = false;
+        let mut subs_dirty = force;
+        if seq != t3.last_seq {
+            let evs = t3.events_since(t3.last_seq, 5000)?;
+            let mut refresh: HashSet<String> = HashSet::new();
+            let mut sessions_dirty = false;
+            for ev in &evs {
+                match ev.kind.as_str() {
+                    k if k.starts_with("thread.") => {
+                        refresh.insert(ev.thread.clone());
+                    }
+                    "subagent.updated" => subs_dirty = true,
+                    "run-attempt.created" | "run-attempt.updated" | "provider-session.attached" => sessions_dirty = true,
+                    "run.updated" | "run.created" => days_dirty = true,
+                    _ => {}
+                }
+            }
+            for id in &refresh {
+                t3.load_threads(Some(id))?;
+                threads_dirty = true;
+            }
+            for ev in evs.iter().filter(|e| e.kind == "thread.created") {
+                let mcp_root = t3
+                    .threads
+                    .get(&ev.thread)
+                    .is_some_and(|t| t.source.as_deref() == Some("mcp") && t.parent.is_none());
+                if mcp_root {
+                    t3.note_created(&ev.thread, ev.seq, now);
+                }
+            }
+            if sessions_dirty {
+                t3.load_sessions()?;
+                sessions_arc = Arc::new(t3.session_thread.clone());
+            }
+            let items: Vec<(String, String)> = evs
+                .iter()
+                .filter_map(|ev| feed.on_event(ev, &t3.threads))
+                .map(|it| (it.id.clone(), serde_json::to_string(&it).unwrap_or_default()))
+                .collect();
+            hub.push_feed(items);
+            if let Some(l) = evs.last() {
+                last_event_ms = l.ts;
+            }
+            live_dirty = true;
+        }
+        if now - last_launch > 5000 {
+            last_launch = now;
+            if t3.resolve_launches(now) {
+                threads_dirty = true;
+                cache_dirty = true;
+            }
+        }
+        if now - last_full > 60_000 {
+            last_full = now;
+            t3.load_threads(None)?;
+            t3.load_sessions()?;
+            sessions_arc = Arc::new(t3.session_thread.clone());
+            threads_dirty = true;
+        }
+        if subs_dirty || now - last_subs > 15_000 {
+            last_subs = now;
+            subs = t3.subagents(window_start)?;
+            live_dirty = true;
+            days_dirty = true;
+        }
+        if live_dirty || now - last_live > 10_000 {
+            last_live = now;
+            active = t3.active_runs()?;
+            waiting = t3.waiting(now)?;
+            // Context fill for threads that are live or recently touched.
+            let mut want: HashSet<&str> = active.iter().map(|r| r.thread.as_str()).collect();
+            for t in t3.threads.values() {
+                if now - t.updated < 3 * 60 * MS_PER_MIN {
+                    want.insert(&t.id);
+                }
+            }
+            let mut fresh = HashMap::new();
+            for id in want {
+                if let Some(c) = t3.ctx(id)? {
+                    fresh.insert(id.to_string(), c);
+                }
+            }
+            ctx = fresh;
+        }
+        runs_pending |= days_dirty;
+        days_dirty = subs_dirty || force;
+        if (runs_pending && now - last_runs > 3000) || now - last_runs > 60_000 {
+            last_runs = now;
+            runs = t3.runs_since(window_start)?;
+            runs_pending = false;
+            days_dirty = true;
+        }
+        t3.end();
+        if threads_dirty {
+            threads_arc = Arc::new(t3.threads.clone());
+        }
+        {
+            let mut sh = shared.lock().unwrap();
+            sh.t3_error = None;
+            sh.t3 = Some(T3Part {
+                seq,
+                threads: threads_arc.clone(),
+                sessions: sessions_arc.clone(),
+                active: active.clone(),
+                subs: subs.clone(),
+                ctx: ctx.clone(),
+                waiting: waiting.clone(),
+                runs: runs.clone(),
+                last_event_ms,
+                launch_links: t3.launch.len(),
+            });
+        }
+        if live_dirty || threads_dirty {
+            publish_live(shared, hub);
+        }
+        if days_dirty || threads_dirty || force {
+            publish_days(shared, hub, force);
+        }
+        if cache_dirty {
+            let c = LaunchCache { v: 1, launch: t3.launch.clone(), checked: t3.launch_checked.clone() };
+            if state::save(cache_path, &c).is_ok() {
+                cache_dirty = false;
+            }
+        }
+        force = false;
+        // Poll faster while things are happening.
+        let busy = now - last_event_ms < 30_000;
+        thread::sleep(Duration::from_millis(if busy { 700 } else { 1500 }));
+    }
+}
+
+// ------------------------------------------------------- transcript worker
+
+fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hub: Arc<Hub>) {
+    let cache_path = state_dir.join("transcripts.json");
+    let off = shared.lock().unwrap().off;
+    let mut t = tail::Tailer::new(root.clone(), off);
+    if let Some(c) = state::load::<tail::TailCache>(&cache_path) {
+        if t.restore(c) {
+            log("transcript cache restored; reading only new bytes");
+        } else {
+            log("transcript cache ignored (version or time zone changed)");
+        }
+    }
+    let mut today = day_of(now_ms(), off);
+    let (mut last_full, mut last_pub, mut last_save, mut last_prune) = (0i64, 0i64, now_ms(), 0i64);
+    let mut days_arc: Arc<Vec<(i32, DayAgg)>> = Arc::new(Vec::new());
+    let mut first = true;
+    loop {
+        let now = now_ms();
+        let day = day_of(now, off);
+        let window_start = day_start_ms(day - 2, off);
+        let mut force = first;
+        if day != today || now - last_prune > 60_000 {
+            if day != today {
+                log("new day: rolling the three-day window");
+                force = true;
+                today = day;
+            }
+            t.agg.prune(day - 2, now, off);
+            last_prune = now;
+        }
+        let t0 = std::time::Instant::now();
+        let changed = if now - last_full >= 5000 {
+            last_full = now;
+            t.full_scan(window_start, now)
+        } else {
+            t.poll_hot(window_start, now)
+        };
+        if first {
+            log(format!(
+                "transcripts ready in {} ms: {} files tracked, {} MB read",
+                t0.elapsed().as_millis(),
+                t.stats.files,
+                t.stats.bytes_read / 1_000_000
+            ));
+        }
+        if changed || force || now - last_pub >= 5000 {
+            last_pub = now;
+            let anchors = shared.lock().unwrap().anchors();
+            let window = t.agg.window(now, &anchors);
+            if changed || force {
+                let mut v: Vec<(i32, DayAgg)> = Vec::with_capacity(3);
+                for d in [day, day - 1, day - 2] {
+                    if let Some(a) = t.agg.days.get(&d) {
+                        v.push((d, a.clone()));
+                    }
+                }
+                days_arc = Arc::new(v);
+            }
+            // Last 6 hours in 5-minute buckets.
+            let step = 5 * MS_PER_MIN;
+            let end = now - now.rem_euclid(step) + step;
+            let start = end - 72 * step;
+            let mut spark = vec![[0.0f64; 4]; 72];
+            let mut spark_obs = vec![0.0f64; 72];
+            for (m, c) in t.agg.mins.range(start / MS_PER_MIN..) {
+                let i = ((m * MS_PER_MIN - start) / step) as usize;
+                if i < 72 {
+                    for f in 0..4 {
+                        spark[i][f] += c.w[f];
+                    }
+                    spark_obs[i] += c.o;
+                }
+            }
+            let sessions: HashMap<String, tail::SessionInfo> = t
+                .sessions
+                .iter()
+                .filter(|(_, s)| s.last >= window_start)
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            let woke: Vec<String> = std::mem::take(&mut t.woke);
+            let hits: Vec<i64> = std::mem::take(&mut t.new_hits);
+            let mut feed_items = Vec::new();
+            {
+                let mut sh = shared.lock().unwrap();
+                sh.tx.days = days_arc.clone();
+                sh.tx.sessions = Arc::new(sessions);
+                sh.tx.window = Some(window);
+                sh.tx.spark_start = start;
+                sh.tx.spark = spark;
+                sh.tx.spark_obs = spark_obs;
+                sh.tx.stats = t.stats.clone();
+                sh.tx.hits = t.agg.hits.clone();
+                sh.tx.ready = true;
+                let mapped: HashSet<String> = sh.t3.as_ref().map(|p| p.sessions.keys().cloned().collect()).unwrap_or_default();
+                if !first {
+                    for s in woke {
+                        if mapped.contains(&s) {
+                            continue;
+                        }
+                        let info = t.sessions.get(&s);
+                        let label = info
+                            .and_then(|i| i.title.clone().or_else(|| i.cwd.as_deref().map(|c| c.rsplit('/').next().unwrap_or(c).to_string())))
+                            .unwrap_or_else(|| s.chars().take(8).collect());
+                        let app = info.and_then(|i| i.ep.clone());
+                        let model = info.and_then(|i| i.model.clone());
+                        feed_items.push(feed::session_item(&s, now, label, app, model));
+                    }
+                    for h in hits {
+                        feed_items.push(feed::limit_item(h));
+                    }
+                }
+            }
+            hub.push_feed(feed_items.into_iter().map(|it| (it.id.clone(), serde_json::to_string(&it).unwrap_or_default())).collect());
+            publish_live(&shared, &hub);
+            if changed || force {
+                publish_days(&shared, &hub, force);
+            }
+        }
+        if t.agg.dirty && now - last_save >= 30_000 {
+            last_save = now;
+            match state::save(&cache_path, &t.to_cache()) {
+                Ok(n) => {
+                    t.agg.dirty = false;
+                    if first || n > 400_000 {
+                        log(format!("cache saved: {} KB", n / 1024));
+                    }
+                }
+                Err(e) => log(format!("cache save failed: {e}")),
+            }
+        }
+        first = false;
+        thread::sleep(Duration::from_millis(1000));
+    }
+}
+
+fn main() {
+    let cfg = config();
+    let listener = match TcpListener::bind(&cfg.bind) {
+        Ok(l) => l,
+        Err(e) => {
+            log(format!("cannot listen on {}: {e}", cfg.bind));
+            std::process::exit(1);
+        }
+    };
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(7317);
+    log(format!(
+        "switchboard on http://{} (utc offset {} min, T3 {}, transcripts {}, state {})",
+        cfg.bind,
+        cfg.off,
+        cfg.t3_db.display(),
+        cfg.claude_root.display(),
+        cfg.state_dir.display()
+    ));
+    let shared = Arc::new(Mutex::new(Shared::new(cfg.off)));
+    let hub = Hub::new();
+    publish_live(&shared, &hub);
+    publish_days(&shared, &hub, true);
+    {
+        let (s, h, db, sd) = (shared.clone(), hub.clone(), cfg.t3_db.clone(), cfg.state_dir.clone());
+        thread::Builder::new().name("t3".into()).stack_size(1 << 20).spawn(move || t3_worker(db, sd, s, h)).unwrap();
+    }
+    {
+        let (s, h, root, sd) = (shared.clone(), hub.clone(), cfg.claude_root.clone(), cfg.state_dir.clone());
+        thread::Builder::new().name("tail".into()).stack_size(1 << 20).spawn(move || tail_worker(root, sd, s, h)).unwrap();
+    }
+    let ui = match cfg.ui {
+        Some(p) => http::Ui::Disk(p),
+        None => http::Ui::Embedded(UI),
+    };
+    let server = Arc::new(http::Server { hub, ui, port, extra_hosts: cfg.extra_hosts });
+    server.run(listener);
+}
