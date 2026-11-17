@@ -29,6 +29,31 @@ With the login item on, `start`, `stop` and `restart` go through launchd;
 start reads only what changed since. The first start after an update that
 changes the cache format reads the last 7 days once (about 6 s).
 
+## What is on the page
+
+- **Who's eating right now**: every active T3 thread with its subagents,
+  model, current step, context fill and today's tokens. Click a row (or press
+  Enter on it) for the thread's runs, tool counts, subagents and a 10-minute
+  token timeline. Press `/` to filter by title, project, branch or model.
+- **The 5-hour plate**: how much of the window is eaten, a run-out forecast
+  from the last 30 minutes, and Codex's own limit line. "Calibrate from
+  /usage" takes the % that Claude's `/usage` shows and scales the meter to it
+  (kept in this browser only), because the meter cannot see claude.ai or other
+  devices.
+- **Three days** and **the week so far**: daily totals, busy hours, model mix,
+  runs, PRs with CI checks, review state and API-equivalent cost, and
+  "spoiled leftovers" (requests that rebuilt over 50K tokens of cache after it
+  expired). "Copy yesterday" and "Copy today" copy a plain-text standup;
+  "Download CSV" saves the week's daily totals.
+- **The bill**: tokens by model and by thread; "API prices" shows what they
+  would cost at API list prices (an estimate; the plan is not billed this way).
+- **Alerts without looking**: the tab title and favicon show the plate and
+  anything waiting on you. "Notify me" turns on desktop notifications for: a
+  thread waiting on you, its prompt cache about to go cold, a thread passing
+  85% context, one thread eating over 25% of the plate in 30 minutes, the
+  plate passing 80% or running out before the reset, and a summary after
+  20:00.
+
 ## What it reads, and what it never does
 
 | Source | How |
@@ -63,12 +88,19 @@ changes the cache format reads the last 7 days once (about 6 s).
   each model weighted by its list price, against the usage at your last limit
   hit. claude.ai chat and other devices count toward the real limit but are not
   visible here.
-- **Days** are local calendar days on this Mac.
+- **Run-out forecast**: weighted usage over the last 30 minutes (idle minutes
+  included, never less than 5) projected to the cap; shown only as an estimate.
+- **Codex** usage counts in the totals as its own app and model family but not
+  in the Claude plate. Its limit line is Codex's own number.
+- **Days** are local calendar days on this Mac. Seven are kept: the last three
+  in detail, days 4 to 7 as daily totals only.
 
 ## Footprint
 
-About 10 to 15 MB of memory and well under 1% CPU while idle (measured in the
-test container). The page shows its own memory and CPU in the footer.
+About 11 to 18 MB of memory (physical footprint on the Mac, depending on how
+busy T3 is) and well under 1% CPU while idle. With no page open it skips
+building the page data altogether; a hidden tab keeps its alerts but does not
+redraw. The page shows the process's own memory and CPU in the footer.
 
 ## If something looks wrong
 
