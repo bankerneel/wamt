@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::agg::{DayAgg, Use, WindowEst};
+use crate::agg::{ColdUse, DayAgg, Use, WindowEst};
 use crate::sys::{memory_bytes, Sys};
 use crate::t3::{ActiveRun, Ctx, Pr, RunRow, Subagent, ThreadMeta, Waiting};
 use crate::tail::{SessionInfo, TailStats};
@@ -517,6 +517,7 @@ struct SourceOut {
     project: Option<String>,
     total: Use,
     sub: Use,
+    cold: ColdUse,
     models: BTreeMap<String, Use>,
     first: i64,
     last: i64,
@@ -580,6 +581,8 @@ struct DayOut<'a> {
     resets: Vec<i64>,
     /// Weighted usage up to the current local time of day.
     by_now: f64,
+    /// Spoiled leftovers: cache rebuilt after the cache expired.
+    cold: ColdUse,
 }
 
 #[derive(Serialize)]
@@ -620,6 +623,7 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
         // Sources: T3 sessions roll up per thread; the note-taker is one row.
         let mut src: HashMap<String, SourceOut> = HashMap::new();
         let mut apps: BTreeMap<&'static str, Use> = BTreeMap::new();
+        let mut cold_day = ColdUse::default();
         for (sid, s) in &agg.sessions {
             let info = sh.tx.sessions.get(sid);
             let app = app_of(sid, info, smap);
@@ -651,6 +655,7 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
                 project,
                 total: Use::default(),
                 sub: Use::default(),
+                cold: ColdUse::default(),
                 models: BTreeMap::new(),
                 first: 0,
                 last: 0,
@@ -663,6 +668,8 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
                 apps.entry(app_key(app)).or_default().merge(u);
             }
             e.sub.merge(&s.sub);
+            e.cold.merge(&s.cold);
+            cold_day.merge(&s.cold);
             e.first = if e.first == 0 { s.first } else { e.first.min(s.first) };
             e.last = e.last.max(s.last);
         }
@@ -785,6 +792,7 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
             hits,
             resets,
             by_now,
+            cold: cold_day,
         });
     }
     serde_json::to_string(&Days { now, days }).unwrap_or_else(|_| "{}".into())

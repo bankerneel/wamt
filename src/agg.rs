@@ -42,6 +42,47 @@ pub struct SessionDay {
     pub sub: Use,
     pub first: i64,
     pub last: i64,
+    /// Cold restarts: big cache rebuilds after the cache had expired.
+    #[serde(default)]
+    pub cold: ColdUse,
+}
+
+/// Spoiled leftovers: requests that rebuilt over 50K tokens of cache after
+/// the previous request's cache had expired.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ColdUse {
+    pub n: u32,
+    /// Cache-creation tokens of those requests.
+    pub tok: u64,
+    /// Weight of just those cache-write tokens.
+    pub w: f64,
+}
+
+impl ColdUse {
+    pub fn merge(&mut self, o: &ColdUse) {
+        self.n += o.n;
+        self.tok += o.tok;
+        self.w += o.w;
+    }
+}
+
+/// Cache writes above this many tokens make a rebuild worth counting.
+pub const COLD_MIN_TOKENS: u64 = 50_000;
+const CACHE_TTL_5M_MS: i64 = 5 * MS_PER_MIN;
+const CACHE_TTL_1H_MS: i64 = 60 * MS_PER_MIN;
+
+/// Is this request a cold restart? `prev_ms` is the previous request in the
+/// same transcript stream (0 when none was seen).
+pub fn is_cold(t: &Tokens, ts_ms: i64, prev_ms: i64) -> bool {
+    if prev_ms <= 0 {
+        return false;
+    }
+    let writes = t.cache_w5m + t.cache_w1h;
+    if writes <= COLD_MIN_TOKENS {
+        return false;
+    }
+    let ttl = if t.cache_w1h > t.cache_w5m { CACHE_TTL_1H_MS } else { CACHE_TTL_5M_MS };
+    ts_ms - prev_ms > ttl
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -163,6 +204,8 @@ pub struct UsageIn<'a> {
     pub tokens: &'a Tokens,
     pub fast: bool,
     pub msg_id: Option<&'a str>,
+    /// Previous request time in the same transcript file (0 = none seen).
+    pub prev_ms: i64,
 }
 
 impl Agg {
@@ -189,6 +232,12 @@ impl Agg {
         s.models.entry(u.model.to_string()).or_default().add(u.tokens, w);
         if u.sub {
             s.sub.add(u.tokens, w);
+        }
+        if is_cold(u.tokens, u.ts_ms, u.prev_ms) {
+            let writes = Tokens { cache_w5m: u.tokens.cache_w5m, cache_w1h: u.tokens.cache_w1h, ..Default::default() };
+            s.cold.n += 1;
+            s.cold.tok += writes.total();
+            s.cold.w += weight(u.model, &writes, u.fast);
         }
         if s.first == 0 || u.ts_ms < s.first {
             s.first = u.ts_ms;
@@ -461,9 +510,57 @@ mod tests {
                 tokens: &t,
                 fast: false,
                 msg_id: Some(id),
+                prev_ms: 0,
             },
             OFF,
         )
+    }
+
+    #[test]
+    fn cold_restart_rules() {
+        let w5 = |n| Tokens { cache_w5m: n, ..Default::default() };
+        let w1 = |n| Tokens { cache_w1h: n, ..Default::default() };
+        let m = MS_PER_MIN;
+        // No previous request: never cold.
+        assert!(!is_cold(&w5(60_000), 100 * m, 0));
+        // 5m writes: 6 minutes idle is cold, 4 is not.
+        assert!(is_cold(&w5(60_000), 106 * m, 100 * m));
+        assert!(!is_cold(&w5(60_000), 104 * m, 100 * m));
+        // 1h writes: 6 minutes is warm, 61 is cold.
+        assert!(!is_cold(&w1(60_000), 106 * m, 100 * m));
+        assert!(is_cold(&w1(60_000), 161 * m, 100 * m));
+        // Small rebuilds do not count; exactly 50K does not.
+        assert!(!is_cold(&w5(50_000), 200 * m, 100 * m));
+        assert!(is_cold(&w5(50_001), 200 * m, 100 * m));
+        // The dominant kind picks the TTL.
+        let mixed = Tokens { cache_w5m: 10_000, cache_w1h: 50_000, ..Default::default() };
+        assert!(!is_cold(&mixed, 110 * m, 100 * m));
+    }
+
+    #[test]
+    fn cold_restart_sums_and_dedupes() {
+        let mut a = Agg::default();
+        let mk = |ts: &str, id: &'static str, prev: i64, t: &'static Tokens| UsageIn {
+            session: "s1",
+            sub: false,
+            observer: false,
+            ts_ms: parse_ts_ms(ts).unwrap(),
+            model: "claude-opus-5-5",
+            tokens: t,
+            fast: false,
+            msg_id: Some(id),
+            prev_ms: prev,
+        };
+        static T: Tokens = Tokens { input: 0, output: 5, cache_read: 0, cache_w5m: 80_000, cache_w1h: 0 };
+        let prev = parse_ts_ms("2026-11-17T10:00:00Z").unwrap();
+        assert!(a.add_usage(mk("2026-11-17T10:20:00Z", "c1", prev, &T), OFF));
+        // Same message id again (split lines) must not count twice.
+        assert!(!a.add_usage(mk("2026-11-17T10:20:00Z", "c1", prev, &T), OFF));
+        // A warm request does not count.
+        assert!(a.add_usage(mk("2026-11-17T10:22:00Z", "c2", prev + 20 * MS_PER_MIN, &T), OFF));
+        let c = a.days.values().next().unwrap().sessions["s1"].cold;
+        assert_eq!((c.n, c.tok), (1, 80_000));
+        assert!((c.w - 80_000.0 * 4.0 * 1.25).abs() < 1e-6, "{}", c.w);
     }
 
     #[test]

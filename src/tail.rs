@@ -32,6 +32,10 @@ pub struct FileRec {
     /// Subagent file already counted as one subagent run.
     #[serde(default)]
     pub sc: bool,
+    /// Time of the last request counted from this file, for cold-restart
+    /// detection (each transcript file has its own cache prefix).
+    #[serde(default)]
+    pub prev: i64,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -54,7 +58,7 @@ pub struct TailCache {
     pub agg: Agg,
 }
 
-pub const CACHE_VERSION: u32 = 3;
+pub const CACHE_VERSION: u32 = 4;
 
 #[derive(Default, Clone, Debug, Serialize)]
 pub struct TailStats {
@@ -490,10 +494,12 @@ impl Tailer {
                         tokens: &l.tokens,
                         fast: l.fast,
                         msg_id: l.msg_id.as_deref(),
+                        prev_ms: t.rec.prev,
                     },
                     self.off,
                 );
                 if counted {
+                    t.rec.prev = t.rec.prev.max(l.ts_ms);
                     if l.ts_ms >= s.last {
                         s.last = l.ts_ms;
                         s.model = Some(model.to_string());
@@ -574,6 +580,48 @@ mod tests {
         t.sessions.insert("ancient".into(), SessionInfo { last: 1, ..Default::default() });
         t.prune_sessions(ws);
         assert!(t.sessions.contains_key("s1") && !t.sessions.contains_key("ancient"));
+    }
+
+    fn big_line(id: &str, ts: &str, w5m: u64, w1h: u64) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":"{ts}","message":{{"id":"{id}","model":"claude-opus-5-5","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":1,"output_tokens":1,"cache_creation":{{"ephemeral_5m_input_tokens":{w5m},"ephemeral_1h_input_tokens":{w1h}}}}}}}}}"#
+        ) + "\n"
+    }
+
+    fn cold_of(t: &Tailer, sid: &str) -> (u32, u64) {
+        t.agg.days.values().filter_map(|d| d.sessions.get(sid)).fold((0, 0), |a, s| (a.0 + s.cold.n, a.1 + s.cold.tok))
+    }
+
+    #[test]
+    fn cold_restarts_per_stream_and_cache() {
+        let root = tmp("cold");
+        let proj = root.join("-Users-x-projects-demo");
+        let dir = proj.join("s1/subagents");
+        fs::create_dir_all(&dir).unwrap();
+        let main = proj.join("s1.jsonl");
+        let sub = dir.join("agent-a.jsonl");
+        // Main: first request (never cold), 10 min later big write (cold),
+        // 1 min later big write (warm).
+        append(&main, &big_line("a1", "2026-11-17T12:00:00Z", 90_000, 0));
+        append(&main, &big_line("a2", "2026-11-17T12:10:00Z", 60_000, 0));
+        append(&main, &big_line("a3", "2026-11-17T12:11:00Z", 70_000, 0));
+        // Subagent has its own stream: its first request is not cold even
+        // though the main stream was active a minute earlier.
+        append(&sub, &big_line("b1", "2026-11-17T12:12:00Z", 90_000, 0));
+        let (ws, now) = (parse_ts_ms(START).unwrap(), parse_ts_ms(NOW).unwrap());
+        let mut t = Tailer::new(root.clone(), 330);
+        t.full_scan(ws, now);
+        assert_eq!(cold_of(&t, "s1"), (1, 60_000));
+        // Survive a restart: a later request in the same files uses the
+        // cached previous time (1h writes, 30 min idle is still warm).
+        let js = serde_json::to_string(&t.to_cache()).unwrap();
+        append(&main, &big_line("a4", "2026-11-17T12:41:00Z", 0, 80_000));
+        append(&sub, &big_line("b2", "2026-11-17T12:40:00Z", 80_000, 0));
+        let mut t2 = Tailer::new(root.clone(), 330);
+        assert!(t2.restore(serde_json::from_str(&js).unwrap()));
+        t2.full_scan(ws, now);
+        // a4: 30 min after a3 with 1h writes, warm. b2: 28 min, 5m writes, cold.
+        assert_eq!(cold_of(&t2, "s1"), (2, 140_000));
     }
 
     #[test]

@@ -283,6 +283,7 @@ td:first-child { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 tr:last-child td { border-bottom: 0; }
 tfoot td { font-weight: 900; border-top: 3px double var(--border); }
 .apptag { font-size: 11px; color: var(--muted); margin-left: 6px; }
+.apptag.cold { border-bottom: 1px dotted var(--muted); cursor: help; }
 .bill #ledger { margin-top: 8px; }
 .norefunds { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; color: var(--accent-ink); text-align: right; margin: 10px 4px 0; transform: rotate(-2deg); }
 
@@ -443,6 +444,7 @@ function modelName(m) {
 }
 const sw = (fam) => `<i class="sw m${fam}" aria-hidden="true"></i>`;
 // A model as a sticker chip: the site's pastel fill, ink text.
+const COLD_TIP = "A request that rebuilt more than 50K tokens of cache because the cache had expired (over 5 min idle, or 60 min for 1-hour caching).";
 const chip = (model) => `<span class="chip c${family(model)}">${esc(modelName(model))}</span>`;
 
 // The wordmark, drawn in chunky pixels like the `clean` banner: a 5x7 grid
@@ -1060,6 +1062,11 @@ function renderDays(force) {
       return `<td class="${n ? "" : "zero"}" data-tip="${esc((by || "none in T3") + (outside ? "<br>" + outside + " outside T3" : ""))}">${full(n)}${d.t3.sub_failed ? `<small>${d.t3.sub_failed} failed</small>` : ""}</td>`;
     }, true],
     ["PRs linked", (d) => { const n = new Set(d.t3.prs.map((p) => p.repo + "#" + p.n)).size; return cell(full(n), !n); }, true],
+    ["Spoiled leftovers", (d) => {
+      const c = d.cold; if (!c || !c.n) return cell("none", true);
+      const share = d.total.w ? Math.max(1, Math.round((c.w / d.total.w) * 100)) : 0;
+      return `<td data-tip="${esc(COLD_TIP)}">${full(c.n)} cold restart${c.n === 1 ? "" : "s"}<small>${compact(c.tok)} tokens rebuilt, ${share}% of the day</small></td>`;
+    }],
     ["Limit reached", (d) => cell(d.hits.length ? d.hits.map(hhmm).join(", ") : "no", !d.hits.length)],
   ];
   h += `<div class="cmpwrap"><table class="cmpt"><thead><tr><th></th>${days.map((d, i) => `<th>${esc(names[i])}</th>`).join("")}</tr></thead><tbody>` +
@@ -1122,7 +1129,7 @@ function renderLedger() {
   const models = Object.entries(d.models).sort((a, b) => b[1].w - a[1].w);
   let h = `<div class="tablewrap"><table>${head}<tbody>` + models.map(([m, u]) => row(chip(m), u)).join("") + `</tbody><tfoot>${row("Total", d.total)}</tfoot></table></div>`;
   h += `<h3>itemised, by thread and session</h3><div class="tablewrap"><table>${head.replace("<th></th>", "<th>Where</th>")}<tbody>` +
-    d.sources.map((s) => row(esc(s.label), s.total, `<span class="apptag">${esc(APPS[s.app] || s.app)}</span>`)).join("") + `</tbody></table></div>` +
+    d.sources.map((s) => row(esc(s.label), s.total, `<span class="apptag">${esc(APPS[s.app] || s.app)}</span>` + (s.cold && s.cold.n ? `<span class="apptag cold" data-tip="${esc(COLD_TIP)}">${s.cold.n} cold restart${s.cold.n === 1 ? "" : "s"}, ${compact(s.cold.tok)} rebuilt</span>` : ""))).join("") + `</tbody></table></div>` +
     (d.sources_more ? `<p class="fine">${d.sources_more} smaller sources are not listed.</p>` : "") +
     '<p class="norefunds">no refunds.</p>';
   $("ledger").innerHTML = h;
