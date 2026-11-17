@@ -226,6 +226,7 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .base-line { stroke: var(--border); stroke-width: 2; }
 .mark-line { stroke: var(--accent-ink); stroke-width: 2; }
 .hit { fill: transparent; }
+.copybar { display: flex; gap: 8px; align-items: center; font-size: 12px; }
 .chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 
 /* Days */
@@ -370,7 +371,8 @@ footer b { font-weight: 800; }
   </main>
 
   <section class="plate big" aria-labelledby="h-days">
-    <div class="chart-head"><h2 class="ticket t-lilac" id="h-days">Three days</h2><div class="legend" id="daysLegend"></div></div>
+    <div class="chart-head"><h2 class="ticket t-lilac" id="h-days">Three days</h2><div class="legend" id="daysLegend"></div>
+      <div class="copybar"><span class="muted">for standup:</span><button class="iconbtn" type="button" data-copy="1">Copy yesterday</button><button class="iconbtn" type="button" data-copy="0">Copy today</button></div></div>
     <div id="days"></div>
   </section>
 
@@ -1158,6 +1160,47 @@ function tick() {
   renderStatus();
 }
 setInterval(tick, 1000);
+
+// ------------------------------------------------------------------ standup
+// Plain text for a standup, from the days payload: metadata only.
+function standupText(i) {
+  const d = S.days && S.days.days && S.days.days[i];
+  if (!d) return null;
+  const L = [`${["Today", "Yesterday"][i]} (${dayParts(d.day).short})`];
+  const t3 = d.t3;
+  if (t3 && t3.threads && t3.threads.length) {
+    const th = [...t3.threads].sort((a, b) => b.runs - a.runs || b.run_ms - a.run_ms);
+    L.push("", `Threads (${th.length}, ${t3.runs} runs):`);
+    for (const t of th) L.push(`- ${t.title || "Untitled thread"}: ${t.runs} run${t.runs === 1 ? "" : "s"}${t.run_ms ? ", " + dur(t.run_ms) : ""}${t.failed ? `, ${t.failed} failed` : ""}`);
+  }
+  if (t3 && t3.prs && t3.prs.length) {
+    L.push("", `PRs linked (${t3.prs.length}):`);
+    for (const p of t3.prs) L.push(`- ${p.repo || ""}#${p.n} ${p.title || ""} (${p.draft && p.state === "open" ? "draft" : p.state || "unknown"})`);
+  }
+  const busy = [];
+  (d.hours_n || []).forEach((n, h) => { if (n > 0) { const last = busy[busy.length - 1]; if (last && last[1] === h) last[1] = h + 1; else busy.push([h, h + 1]); } });
+  const hh = (h) => String(h % 24).padStart(2, "0") + ":00";
+  if (busy.length) L.push("", `Busy: ${busy.map(([a, b]) => hh(a) + " to " + hh(b)).join(", ")} (${dur(d.active_min * 60000)} active)`);
+  const t = d.total || { t: [0, 0], n: 0 };
+  L.push(`Output: ${compact(t.t[1] || 0)} tokens over ${full(t.n)} requests`);
+  return L.join("\n");
+}
+document.querySelectorAll("[data-copy]").forEach((btn) => btn.addEventListener("click", async () => {
+  const text = standupText(Number(btn.dataset.copy));
+  const was = btn.textContent;
+  let ok = false;
+  if (text) {
+    try { await navigator.clipboard.writeText(text); ok = true; }
+    catch (_) {
+      const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { ok = document.execCommand("copy"); } catch (_) {}
+      ta.remove();
+    }
+  }
+  btn.textContent = ok ? "Copied" : text ? "Copy failed" : "Nothing yet";
+  setTimeout(() => (btn.textContent = was), 1500);
+}));
 
 // ------------------------------------------------------------------ alerts
 // Tab title, favicon badge and opt-in desktop notifications, all in the page.
