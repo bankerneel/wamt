@@ -410,9 +410,14 @@ impl T3 {
         let sql = format!(
             "SELECT li.thread_id, t.thread_id
              FROM orchestration_v2_projection_turn_items li
+             JOIN orchestration_v2_projection_threads s ON s.thread_id = li.thread_id
              JOIN orchestration_v2_projection_threads t
                ON t.thread_id <> li.thread_id AND instr(li.payload_json, t.thread_id) > 0
              WHERE li.type = 'dynamic_tool' AND json_extract(li.payload_json,'$.toolName') IN {LAUNCH_TOOLS}
+               -- A launcher is older than what it launched, and the call
+               -- happens around the moment the new thread is created.
+               AND t.created_at >= s.created_at
+               AND abs(julianday(li.updated_at) - julianday(t.created_at)) < 0.02
              ORDER BY li.updated_at"
         );
         let mut st = self.conn.prepare(&sql)?;
@@ -495,8 +500,7 @@ impl T3 {
               CASE WHEN event_type IN ('run.updated','subagent.updated','turn-item.updated') THEN json_extract(payload_json,'$.completedAt') END,
               CASE WHEN event_type IN ('run.updated','run.created') THEN json_extract(payload_json,'$.ordinal') END,
               CASE WHEN event_type = 'thread.pull-request-link-updated' THEN json_extract(payload_json,'$.number') END,
-              CASE WHEN event_type = 'thread.pull-request-link-updated' THEN json_extract(payload_json,'$.repository') END,
-              CASE WHEN event_type IN ('turn-item.updated','subagent.updated') THEN json_extract(payload_json,'$.runId') END
+              CASE WHEN event_type = 'thread.pull-request-link-updated' THEN json_extract(payload_json,'$.repository') END
             FROM orchestration_events WHERE sequence > ?1 ORDER BY sequence LIMIT ?2";
         let mut st = self.conn.prepare_cached(sql)?;
         let rows = st.query_map(params![from_seq, limit], |r| {

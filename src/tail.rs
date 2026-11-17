@@ -51,7 +51,7 @@ pub struct TailCache {
     pub agg: Agg,
 }
 
-pub const CACHE_VERSION: u32 = 1;
+pub const CACHE_VERSION: u32 = 2;
 
 #[derive(Default, Clone, Debug, Serialize)]
 pub struct TailStats {
@@ -174,7 +174,8 @@ impl Tailer {
             return false;
         }
         for (p, rec) in c.files {
-            let path = PathBuf::from(&p);
+            // Paths are stored relative to the transcripts folder.
+            let path = self.root.join(&p);
             if let Some((session, sub, obs)) = classify(&self.root, &path) {
                 let agent_type = if sub { agent_type(&path) } else { None };
                 self.files.insert(path, Tracked { rec, session, sub, obs, agent_type });
@@ -189,7 +190,11 @@ impl Tailer {
         TailCacheRef {
             v: CACHE_VERSION,
             off: self.off,
-            files: self.files.iter().filter_map(|(p, t)| p.to_str().map(|s| (s, &t.rec))).collect(),
+            files: self
+                .files
+                .iter()
+                .filter_map(|(p, t)| p.strip_prefix(&self.root).ok().and_then(|r| r.to_str()).map(|s| (s, &t.rec)))
+                .collect(),
             sessions: &self.sessions,
             agg: &self.agg,
         }

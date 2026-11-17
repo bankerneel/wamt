@@ -1,1 +1,1044 @@
-<!doctype html><meta charset="utf-8"><title>Switchboard</title><p>UI pending</p>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23191c20'/%3E%3Ccircle cx='11' cy='11' r='4' fill='%23ffcf6e'/%3E%3Ccircle cx='21' cy='11' r='4' fill='%233a4048'/%3E%3Ccircle cx='11' cy='21' r='4' fill='%233a4048'/%3E%3Ccircle cx='21' cy='21' r='4' fill='%23ffcf6e'/%3E%3C/svg%3E">
+<style>
+:root {
+  color-scheme: light;
+  --chassis: #c9cdd1;
+  --plate: #f3f4f5;
+  --plate-2: #e7e9eb;
+  --rule: #d5d8db;
+  --ink: #14181c;
+  --ink-2: #4b5158;
+  --muted: #737980;
+  --lamp-on: #f2a51a;
+  --lamp-glow: rgba(242, 165, 26, .45);
+  --lamp-off: #c3c8cd;
+  --lamp-ring: rgba(20, 24, 28, .18);
+  --need: #d03b3b;
+  --need-glow: rgba(208, 59, 59, .35);
+  --good: #006300;
+  --warn: #b97800;
+  --m0: #2a78d6; --m1: #eb6834; --m2: #1baf7a; --m3: #eda100;
+  --cord: #9aa1a8;
+  --meter-track: #dfe2e5;
+  --focus: #2a78d6;
+  --shadow-tip: 0 6px 20px rgba(20, 24, 28, .18);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --chassis: #101215; --plate: #191c20; --plate-2: #20242a; --rule: #2b3036;
+    --ink: #ebe9e4; --ink-2: #b4b2ab; --muted: #868479;
+    --lamp-on: #ffcf6e; --lamp-glow: rgba(255, 190, 80, .5); --lamp-off: #2c3137; --lamp-ring: rgba(255, 255, 255, .08);
+    --need: #ff5d52; --need-glow: rgba(255, 93, 82, .45); --good: #3fbf5f; --warn: #e7a33a;
+    --m0: #3987e5; --m1: #d95926; --m2: #199e70; --m3: #c98500;
+    --cord: #474e57; --meter-track: #2a2f35; --focus: #6da7ec;
+    --shadow-tip: 0 6px 24px rgba(0, 0, 0, .5);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --chassis: #101215; --plate: #191c20; --plate-2: #20242a; --rule: #2b3036;
+  --ink: #ebe9e4; --ink-2: #b4b2ab; --muted: #868479;
+  --lamp-on: #ffcf6e; --lamp-glow: rgba(255, 190, 80, .5); --lamp-off: #2c3137; --lamp-ring: rgba(255, 255, 255, .08);
+  --need: #ff5d52; --need-glow: rgba(255, 93, 82, .45); --good: #3fbf5f; --warn: #e7a33a;
+  --m0: #3987e5; --m1: #d95926; --m2: #199e70; --m3: #c98500;
+  --cord: #474e57; --meter-track: #2a2f35; --focus: #6da7ec;
+  --shadow-tip: 0 6px 24px rgba(0, 0, 0, .5);
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--chassis); color: var(--ink);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.din { font-family: "DIN Alternate", "DIN Condensed", "Bahnschrift", "Roboto", -apple-system, sans-serif; font-weight: 700; letter-spacing: .01em; }
+.num { font-variant-numeric: tabular-nums; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+
+.chassis { max-width: 1680px; margin: 0 auto; padding: 10px; display: grid; gap: 8px; }
+.plate { background: var(--plate); border-radius: 4px; box-shadow: inset 0 1px 0 var(--lamp-ring); padding: 14px 16px; min-width: 0; }
+h2 { font-family: "DIN Alternate", "DIN Condensed", "Bahnschrift", "Roboto", -apple-system, sans-serif; font-weight: 700; font-size: 15px; letter-spacing: .02em; margin: 0 0 10px; color: var(--ink); }
+h3 { font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 16px 0 6px; }
+.muted { color: var(--muted); }
+.ink2 { color: var(--ink-2); }
+
+/* Top bar */
+.topbar { display: flex; align-items: center; gap: 18px; padding: 10px 16px; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.wordmark { font-family: "DIN Alternate", "DIN Condensed", "Bahnschrift", "Roboto", -apple-system, sans-serif; font-weight: 700; font-size: 20px; letter-spacing: .04em; }
+.status { color: var(--ink-2); font-size: 13px; }
+.status b { color: var(--ink); font-weight: 600; }
+.spacer { flex: 1; }
+.clock { font-size: 13px; color: var(--ink-2); }
+.clock .din { font-size: 17px; color: var(--ink); margin-right: 6px; }
+.iconbtn { background: none; border: 1px solid var(--rule); border-radius: 4px; padding: 4px 9px; cursor: pointer; font-size: 12px; color: var(--ink-2); }
+.iconbtn:hover { background: var(--plate-2); }
+
+.banner { background: var(--need); color: #fff; border-radius: 4px; padding: 10px 16px; font-weight: 500; }
+.banner[hidden] { display: none; }
+
+/* Lamps */
+.lamp { width: 10px; height: 10px; border-radius: 50%; background: var(--lamp-off); box-shadow: inset 0 0 0 1px var(--lamp-ring); flex: none; display: inline-block; }
+.lamp.on { background: var(--lamp-on); box-shadow: 0 0 0 1px var(--lamp-on), 0 0 10px 2px var(--lamp-glow); animation: breathe 2.4s ease-in-out infinite; }
+.lamp.need { background: var(--need); box-shadow: 0 0 0 1px var(--need), 0 0 10px 2px var(--need-glow); animation: breathe 1.2s ease-in-out infinite; }
+.lamp.done { background: transparent; box-shadow: inset 0 0 0 1.5px var(--cord); }
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .lamp.on, .lamp.need { animation: none; } .flash { animation: none !important; } }
+
+/* Readout sentence */
+.readout { font-size: 15px; color: var(--ink-2); line-height: 1.7; padding: 12px 16px; }
+.readout .din { font-size: 19px; color: var(--ink); margin: 0 1px; }
+.readout .live-n { color: var(--ink); }
+
+/* Main grid */
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 8px; align-items: start; }
+.side, .col { display: grid; gap: 8px; min-width: 0; align-content: start; }
+
+/* Board */
+.board-head, .row { display: grid; grid-template-columns: 14px minmax(200px, 1fr) 128px 168px 96px 82px 54px; gap: 10px; align-items: center; }
+.board-head { font-size: 11px; color: var(--muted); padding: 0 6px 6px; border-bottom: 1px solid var(--rule); }
+.board-head span:nth-child(6), .board-head span:nth-child(7), .row .tok, .row .ago { text-align: right; }
+.rows { display: grid; }
+.row { padding: 5px 6px; min-height: 46px; border-radius: 3px; }
+.row:hover { background: var(--plate-2); }
+.row.flash { animation: flash 1.2s ease-out; }
+@keyframes flash { from { background: var(--plate-2); } to { background: transparent; } }
+.who { display: flex; align-items: stretch; min-width: 0; }
+.cords { display: flex; flex: none; align-self: stretch; margin: -5px 0; }
+.cords span { width: 16px; position: relative; flex: none; }
+.cords .pipe::before, .cords .tee::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; border-left: 2px solid var(--cord); }
+.cords .tee::after { content: ""; position: absolute; left: 9px; top: calc(50% - 1px); width: 7px; border-top: 2px solid var(--cc, var(--cord)); }
+.cords .elbow::after { content: ""; position: absolute; left: 7px; top: 0; height: calc(50% + 1px); width: 9px; border-left: 2px solid var(--cord); border-bottom: 2px solid var(--cc, var(--cord)); border-bottom-left-radius: 7px; }
+.names { min-width: 0; padding-left: 2px; display: flex; flex-direction: column; justify-content: center; }
+.t { font-weight: 550; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.depth0 .t { font-weight: 650; }
+.sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model .eff { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; }
+.sw.m0 { background: var(--m0); } .sw.m1 { background: var(--m1); } .sw.m2 { background: var(--m2); } .sw.m3 { background: var(--m3); }
+.now { font-size: 13px; min-width: 0; }
+.now .step { font-weight: 600; }
+.now .need { color: var(--need); font-weight: 600; }
+.now .line2 { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctx { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.meter { flex: 1; height: 4px; border-radius: 2px; background: var(--meter-track); overflow: hidden; min-width: 30px; }
+.meter b { display: block; height: 100%; background: var(--ink-2); border-radius: 2px; }
+.meter b.warn { background: var(--warn); } .meter b.crit { background: var(--need); }
+.tok { font-size: 13px; }
+.tok small { display: block; font-size: 11px; color: var(--muted); }
+.ago { font-size: 12px; color: var(--muted); }
+.group-label { font-size: 12px; color: var(--muted); padding: 14px 6px 4px; border-top: 1px solid var(--rule); margin-top: 6px; }
+.empty { color: var(--muted); padding: 18px 6px; }
+
+/* Window */
+.window .hero { display: flex; align-items: baseline; gap: 2px 3px; flex-wrap: wrap; }
+.window .big { font-size: 56px; line-height: 1; }
+.window .pct { font-size: 26px; }
+.window .of { font-size: 13px; color: var(--ink-2); flex-basis: 100%; margin-top: 2px; }
+.wbar { position: relative; height: 12px; margin: 14px 0 6px; border-radius: 3px; background: var(--meter-track); display: flex; gap: 2px; overflow: visible; }
+.wbar i { display: block; height: 100%; }
+.wbar i:first-child { border-radius: 3px 0 0 3px; }
+.wbar .capline { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink); border-radius: 1px; }
+.wscale { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 14px 0 0; font-size: 13px; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+.fine { font-size: 12px; color: var(--muted); margin: 12px 0 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+
+/* Feed */
+.feed-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.feed-head h2 { margin: 0; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+.seg button { background: none; border: 0; padding: 3px 10px; font-size: 12px; color: var(--ink-2); cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--plate-2); color: var(--ink); font-weight: 600; }
+.feed ol { list-style: none; margin: 0; padding: 0; max-height: 520px; overflow-y: auto; scrollbar-width: thin; }
+.feed li { display: grid; grid-template-columns: 58px 12px 1fr; gap: 8px; padding: 5px 2px; font-size: 13px; border-bottom: 1px solid var(--rule); align-items: baseline; }
+.feed li:last-child { border-bottom: 0; }
+.feed li .time { color: var(--muted); font-size: 12px; }
+.feed li .k { width: 8px; height: 8px; border-radius: 50%; align-self: center; }
+.k.start { background: var(--lamp-on); }
+.k.end { box-shadow: inset 0 0 0 1.5px var(--ink-2); }
+.k.alert { background: var(--need); }
+.k.tools { background: var(--cord); border-radius: 1px; height: 2px; width: 10px; }
+.k.pr { box-shadow: inset 0 0 0 1.5px var(--m0); border-radius: 2px; }
+.k.other { background: var(--ink-2); width: 6px; height: 6px; }
+.feed li .what b { font-weight: 600; }
+.feed li .what .muted { font-size: 12px; }
+.feed li.fresh { animation: flash 1.6s ease-out; }
+
+/* Six hours */
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.axis { font-size: 11px; fill: var(--muted); }
+.grid-line { stroke: var(--rule); stroke-width: 1; }
+.base-line { stroke: var(--cord); stroke-width: 1; }
+.mark-line { stroke: var(--ink-2); stroke-width: 1.5; }
+.hit { fill: transparent; }
+.chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.chart-head h2 { margin: 0; }
+
+/* Days */
+.dayrow { display: grid; grid-template-columns: 112px minmax(0, 1fr) 132px; gap: 14px; align-items: end; padding: 6px 0; border-bottom: 1px solid var(--rule); }
+.dayrow:last-of-type { border-bottom: 0; }
+.dlabel b { display: block; font-weight: 600; }
+.dlabel small { display: block; font-size: 12px; color: var(--muted); }
+.dsum { text-align: right; }
+.dsum .big { font-size: 26px; line-height: 1; display: block; }
+.dsum small { font-size: 12px; color: var(--muted); }
+.dsum.zero .big { color: var(--muted); }
+.daxis { display: grid; grid-template-columns: 112px minmax(0, 1fr) 132px; gap: 14px; }
+.daxis div { position: relative; height: 14px; }
+.daxis span { position: absolute; font-size: 11px; color: var(--muted); transform: translateX(-50%); }
+.daxis span:first-child { transform: none; }
+.daxis span:last-child { transform: translateX(-100%); }
+.cmpwrap { overflow-x: auto; margin-top: 18px; }
+.cmpt th { font-size: 12px; color: var(--ink); font-weight: 600; text-align: right; }
+.cmpt th:first-child, .cmpt td:first-child { text-align: left; color: var(--muted); font-size: 12px; }
+.cmpt td { font-size: 14px; }
+.cmpt td small { color: var(--muted); font-size: 11px; margin-left: 4px; }
+.cmpt td.zero { color: var(--muted); }
+.split { display: inline-flex; gap: 2px; height: 8px; width: 120px; border-radius: 4px; overflow: hidden; background: var(--meter-track); vertical-align: middle; }
+.split i { display: block; height: 100%; }
+.dcols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin-top: 6px; }
+.dcols h3 { margin-top: 18px; }
+.daynone { color: var(--muted); font-size: 13px; }
+.cmp { font-size: 12px; color: var(--ink-2); }
+.cmp b { font-weight: 600; color: var(--ink); }
+.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.list li { display: grid; grid-template-columns: minmax(0, 1fr) 64px; gap: 8px; font-size: 13px; align-items: center; }
+.list .lbl { min-width: 0; }
+.list .lbl span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list .lbl small { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list .bar { height: 4px; border-radius: 2px; background: var(--meter-track); margin-top: 4px; overflow: hidden; }
+.list .bar i { display: block; height: 100%; background: var(--ink-2); border-radius: 2px; }
+.list .v { text-align: right; font-size: 12px; color: var(--ink-2); }
+.prs li { grid-template-columns: 52px minmax(0, 1fr); }
+.state { font-size: 11px; color: var(--muted); }
+.state.merged { color: var(--good); } .state.open { color: var(--ink-2); }
+.noday { color: var(--muted); padding: 28px 0 8px; font-size: 14px; }
+
+/* Ledger */
+.tabs { display: inline-flex; gap: 2px; border: 1px solid var(--rule); border-radius: 4px; padding: 2px; }
+.tabs button { background: none; border: 0; border-radius: 3px; padding: 3px 10px; cursor: pointer; font-size: 12px; color: var(--ink-2); }
+.tabs button[aria-selected="true"] { background: var(--plate-2); color: var(--ink); font-weight: 600; }
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: right; font-weight: 500; font-size: 11px; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+td:first-child { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+tr:last-child td { border-bottom: 0; }
+tfoot td { font-weight: 600; border-top: 1px solid var(--rule); }
+.apptag { font-size: 11px; color: var(--muted); margin-left: 6px; }
+
+footer { font-size: 12px; color: var(--ink-2); padding: 4px 6px 14px; display: flex; flex-wrap: wrap; gap: 6px 20px; }
+footer span { white-space: nowrap; }
+
+#tip { position: fixed; z-index: 10; pointer-events: none; background: var(--plate); color: var(--ink); border-radius: 4px; padding: 8px 10px; font-size: 12px; line-height: 1.5; box-shadow: var(--shadow-tip), inset 0 0 0 1px var(--rule); max-width: 300px; opacity: 0; transition: opacity .08s; }
+#tip.show { opacity: 1; }
+#tip b { font-weight: 600; }
+
+@media (max-width: 1180px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .dcols { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}
+@media (max-width: 760px) {
+  .chassis { padding: 6px; gap: 6px; }
+  .side { grid-template-columns: minmax(0, 1fr); }
+  /* On a phone, keep what each line is doing; drop context, totals, last. */
+  .board-head, .row { grid-template-columns: 12px minmax(0, 1fr) 76px 92px; }
+  .board-head span:nth-child(5), .board-head span:nth-child(6), .board-head span:nth-child(7),
+  .row .ctx, .row .tok, .row .ago, .row .model .eff { display: none; }
+  .row .now .line2 { display: none; }
+  .topbar { flex-wrap: wrap; gap: 8px 14px; }
+  .clock { display: none; }
+  .dayrow, .daxis { grid-template-columns: 72px minmax(0, 1fr) 76px; gap: 8px; }
+  .dsum .big { font-size: 20px; }
+  .window .big { font-size: 46px; }
+}
+@media (forced-colors: active) { .lamp.on, .lamp.need { forced-color-adjust: none; } }
+</style>
+</head>
+<body>
+<div class="chassis">
+  <div class="banner" id="banner" hidden></div>
+  <header class="plate topbar">
+    <div class="brand"><span class="lamp" id="hdrLamp" aria-hidden="true"></span><span class="wordmark">Switchboard</span></div>
+    <div class="status" id="status" role="status" aria-live="polite">Connecting</div>
+    <div class="spacer"></div>
+    <div class="clock" id="clock"></div>
+    <button class="iconbtn" id="themeBtn" type="button">Light</button>
+  </header>
+
+  <section class="plate readout" id="readout" aria-label="Today so far">Reading your agents</section>
+
+  <main class="grid">
+    <div class="col">
+      <section class="plate" aria-labelledby="h-board">
+        <h2 id="h-board">Running now</h2>
+        <div class="board-head" aria-hidden="true"><span></span><span>Thread</span><span>Model</span><span>Doing</span><span>Context</span><span>Today</span><span>Last</span></div>
+        <div class="rows" id="board" role="list"></div>
+        <div class="rows" id="outside" role="list"></div>
+      </section>
+      <section class="plate" aria-labelledby="h-spark">
+        <div class="chart-head"><h2 id="h-spark">Last six hours</h2><div class="legend" id="sparkLegend"></div></div>
+        <div class="chart" id="spark"></div>
+      </section>
+    </div>
+    <aside class="side">
+      <section class="plate window" id="window" aria-label="Five-hour window"></section>
+      <section class="plate feed" aria-labelledby="h-feed">
+        <div class="feed-head">
+          <h2 id="h-feed">What just happened</h2>
+          <div class="seg" role="group" aria-label="Feed filter">
+            <button type="button" data-f="all" aria-pressed="true">All</button>
+            <button type="button" data-f="key" aria-pressed="false">Milestones</button>
+          </div>
+        </div>
+        <ol id="feed" aria-live="off"></ol>
+      </section>
+    </aside>
+  </main>
+
+  <section class="plate" aria-labelledby="h-days">
+    <div class="chart-head"><h2 id="h-days">Three days</h2><div class="legend" id="daysLegend"></div></div>
+    <div id="days"></div>
+  </section>
+
+  <section class="plate" aria-labelledby="h-ledger">
+    <div class="chart-head"><h2 id="h-ledger">Tokens</h2><div class="tabs" role="tablist" id="ledgerTabs"></div></div>
+    <div id="ledger"></div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+<div id="tip" role="tooltip"></div>
+
+<script>
+"use strict";
+// ------------------------------------------------------------------ state
+const S = { live: null, days: null, feed: new Map(), skew: 0, connected: false, lastMsg: 0,
+            feedFilter: "all", ledgerDay: 0, rawDays: "", sparkKey: "", fresh: new Set() };
+const $ = (id) => document.getElementById(id);
+const now = () => Date.now() + S.skew;
+
+// ------------------------------------------------------------------ format
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function compact(n) {
+  n = Number(n) || 0;
+  const a = Math.abs(n);
+  if (a < 1000) return String(Math.round(n));
+  const units = [[1e9, "B"], [1e6, "M"], [1e3, "K"]];
+  for (const [v, u] of units) if (a >= v) { const x = n / v; return (x < 10 ? x.toFixed(1) : Math.round(x).toString()).replace(/\.0$/, "") + u; }
+  return String(n);
+}
+const full = (n) => (Number(n) || 0).toLocaleString("en-US");
+function dur(ms, precise) {
+  ms = Math.max(0, ms || 0);
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return precise || m < 10 ? m + "m " + String(s % 60).padStart(2, "0") + "s" : m + "m";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h " + String(m % 60).padStart(2, "0") + "m";
+  return Math.floor(h / 24) + "d " + (h % 24) + "h";
+}
+// Coarse "how long ago": seconds would make idle rows tick for no reason.
+function ago(ms) {
+  if (ms < 45000) return "now";
+  const m = Math.round(ms / 60000);
+  if (m < 60) return Math.max(1, m) + "m";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h " + String(m % 60).padStart(2, "0") + "m";
+  return Math.floor(h / 24) + "d " + (h % 24) + "h";
+}
+function off() { return (S.live && S.live.off) || -new Date().getTimezoneOffset(); }
+function local(ms) { return new Date(ms + off() * 60000); }
+function hhmm(ms) { const d = local(ms); return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); }
+function hhmmss(ms) { const d = local(ms); return hhmm(ms) + ":" + String(d.getUTCSeconds()).padStart(2, "0"); }
+const WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function dayParts(label) { const [y, m, d] = label.split("-").map(Number); const dt = new Date(Date.UTC(y, m - 1, d)); return { wd: WEEK[dt.getUTCDay()], short: WEEK[dt.getUTCDay()].slice(0, 3) + " " + d + " " + MON[m - 1] }; }
+function family(model) { model = model || ""; return model.includes("opus") ? 0 : model.includes("sonnet") ? 1 : model.includes("haiku") ? 2 : 3; }
+const FAM = ["Opus", "Sonnet", "Haiku", "Other"];
+function modelName(m) {
+  if (!m) return "Unknown";
+  const x = m.replace(/^claude-/, "").replace(/\[.*\]$/, "");
+  const p = x.split("-");
+  const name = p[0].charAt(0).toUpperCase() + p[0].slice(1);
+  const ver = p.slice(1).filter((q) => /^\d+$/.test(q)).join(".");
+  return ver ? name + " " + ver : name;
+}
+const sw = (fam) => `<i class="sw m${fam}" aria-hidden="true"></i>`;
+const APPS = { t3: "T3", desktop: "Claude Desktop", cli: "Claude CLI", sdk: "SDK", notetaker: "Note-taker", other: "Other" };
+const EP = { "claude-desktop": "Claude Desktop", cli: "Claude CLI", "sdk-ts": "SDK" };
+const tokTotal = (t) => (t ? t.reduce((a, b) => a + b, 0) : 0);
+
+// ------------------------------------------------------------------ tooltip
+const tip = $("tip");
+document.addEventListener("pointermove", (e) => {
+  const el = e.target.closest && e.target.closest("[data-tip]");
+  if (!el) { tip.classList.remove("show"); return; }
+  tip.innerHTML = el.getAttribute("data-tip");
+  tip.classList.add("show");
+  const r = tip.getBoundingClientRect();
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 14;
+  if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+});
+document.addEventListener("pointerleave", () => tip.classList.remove("show"));
+
+// ------------------------------------------------------------------ theme
+(function theme() {
+  const btn = $("themeBtn");
+  let saved = null;
+  try { saved = localStorage.getItem("sb-theme"); } catch (_) {}
+  const forced = new URLSearchParams(location.search).get("theme");
+  if (forced === "dark" || forced === "light") saved = forced;
+  if (saved) document.documentElement.setAttribute("data-theme", saved);
+  const isDark = () => { const t = document.documentElement.getAttribute("data-theme"); return t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches; };
+  const label = () => { btn.textContent = isDark() ? "Light" : "Dark"; btn.setAttribute("aria-label", isDark() ? "Switch to light theme" : "Switch to dark theme"); };
+  label();
+  btn.addEventListener("click", () => {
+    const next = isDark() ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("sb-theme", next); } catch (_) {}
+    label(); S.sparkKey = ""; renderSpark(); renderDays(true);
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { label(); S.sparkKey = ""; renderSpark(); renderDays(true); });
+})();
+
+// ------------------------------------------------------------------ header + readout
+function renderHeader() {
+  const L = S.live; if (!L) return;
+  const h = L.health;
+  const banner = $("banner");
+  if (h.problems && h.problems.length) {
+    banner.hidden = false;
+    banner.textContent = "T3's database layout changed, so live thread data is paused: " + h.problems.join("; ") + ". Token figures still update.";
+  } else if (h.t3 === "down" && h.t3_error) {
+    banner.hidden = false;
+    banner.textContent = "Can't read T3's database: " + h.t3_error + ". Token figures still update.";
+  } else banner.hidden = true;
+  const live = L.threads.some((t) => t.run && t.run.status !== "waiting") || L.subs.some((s) => s.status === "running");
+  const need = L.today.waiting > 0;
+  $("hdrLamp").className = "lamp" + (need ? " need" : live ? " on" : "");
+}
+function renderStatus() {
+  const st = $("status");
+  if (!S.connected) { st.innerHTML = "Reconnecting to Switchboard"; return; }
+  const L = S.live; if (!L) return;
+  const ev = L.health.last_event;
+  const evtxt = ev ? "last T3 event <b>" + ago(now() - ev) + (now() - ev < 45000 ? "" : " ago") + "</b>" : "no T3 events yet";
+  st.innerHTML = "Live, updated <b>" + Math.max(0, Math.round((now() - S.lastMsg) / 1000)) + "s</b> ago, " + evtxt;
+  const c = $("clock");
+  const d = local(now());
+  c.innerHTML = `<span class="din">${hhmm(now())}</span>${WEEK[d.getUTCDay()].slice(0, 3)} ${d.getUTCDate()} ${MON[d.getUTCMonth()]}`;
+}
+function renderReadout() {
+  const L = S.live; if (!L) return;
+  const t = L.today;
+  if (!L.health.tx_ready) { $("readout").textContent = "Reading today's transcripts"; return; }
+  const n = (v) => `<span class="din num">${compact(v)}</span>`;
+  const parts = [];
+  parts.push(`Today so far: ${n(t.output)} output tokens from ${n(t.calls)} requests (${n(t.tokens)} tokens in all), active for <span class="din num">${(t.active_min / 60).toFixed(1)}</span> hours.`);
+  parts.push(`T3 ran ${n(t.runs)} runs in ${n(t.threads)} threads and ${n(t.subagents)} subagents, and linked ${n(t.prs)} PRs.`);
+  if (t.hits) parts.push(`You reached the usage limit ${t.hits === 1 ? "once" : t.hits + " times"} today.`);
+  const live = [];
+  if (t.runs_live) live.push(`<span class="live-n">${t.runs_live} run${t.runs_live === 1 ? "" : "s"} going</span>`);
+  if (t.subagents_live) live.push(`<span class="live-n">${t.subagents_live} subagent${t.subagents_live === 1 ? "" : "s"} working</span>`);
+  if (t.waiting) live.push(`<span class="live-n" style="color:var(--need)">${t.waiting} waiting on you</span>`);
+  parts.push(live.length ? "Right now: " + live.join(", ") + "." : "Nothing is running right now.");
+  $("readout").innerHTML = parts.join(" ");
+}
+
+// ------------------------------------------------------------------ board
+function buildTree(L) {
+  const byId = new Map(L.threads.map((t) => [t.id, { kind: "thread", id: t.id, t, kids: [] }]));
+  const roots = [];
+  for (const n of byId.values()) {
+    const up = n.t.parent || n.t.launcher;
+    if (up && byId.has(up)) byId.get(up).kids.push(n); else roots.push(n);
+  }
+  // Subagents without their own T3 thread (built-in Claude subagents) are leaf lines.
+  for (const s of L.subs) {
+    if (s.child && byId.has(s.child)) { byId.get(s.child).sub = s; continue; }
+    const p = byId.get(s.thread);
+    if (p) p.kids.push({ kind: "sub", id: "sub:" + s.id, s, kids: [] });
+  }
+  const activity = (n) => {
+    if (n.kind === "sub") return { live: n.s.status === "running" ? 2 : 0, ts: n.s.updated };
+    const t = n.t;
+    const live = t.waiting || (t.run && t.run.status === "waiting") ? 3 : t.run ? 2 : 0;
+    return { live, ts: Math.max(t.updated, t.last_req || 0, t.run && t.run.step ? t.run.step.since : 0) };
+  };
+  const score = (n) => {
+    const a = activity(n);
+    let live = a.live, ts = a.ts;
+    for (const k of n.kids) { const s = score(k); live = Math.max(live, s.live ? 1 : 0, s.live); ts = Math.max(ts, s.ts); }
+    n._score = { live, ts };
+    return n._score;
+  };
+  roots.forEach(score);
+  const sort = (arr) => { arr.sort((a, b) => (b._score.live - a._score.live) || (b._score.ts - a._score.ts)); arr.forEach((n) => sort(n.kids)); };
+  sort(roots);
+  const out = [];
+  const walk = (n, depth, trail, last) => {
+    out.push({ n, depth, trail, last });
+    n.kids.forEach((k, i) => walk(k, depth + 1, depth ? trail.concat([!last]) : trail, i === n.kids.length - 1));
+  };
+  roots.forEach((r) => walk(r, 0, [], true));
+  return out;
+}
+
+function cordsHtml(depth, trail, last, fam) {
+  if (!depth) return "";
+  let h = '<span class="cords" aria-hidden="true">';
+  for (const pipe of trail) h += `<span class="${pipe ? "pipe" : ""}"></span>`;
+  h += `<span class="${last ? "elbow" : "tee"}" style="--cc:var(--m${fam})"></span>`;
+  return h + "</span>";
+}
+
+function threadRow(n, depth, trail, last, L) {
+  const t = n.t;
+  const run = t.run;
+  const model = (run && run.model) || (n.sub && n.sub.model) || t.model;
+  const fam = family(model);
+  const eff = (run && run.effort) || t.effort;
+  const waiting = t.waiting || (run && run.status === "waiting");
+  const lamp = waiting ? "need" : run ? "on" : "";
+  const subBits = [];
+  if (n.sub) subBits.push(n.sub.origin === "provider_native" ? "built-in subagent" : "subagent");
+  else if (depth === 0 && t.source === "web") subBits.push("started by you");
+  if (t.project) subBits.push(t.project);
+  if (t.branch) subBits.push(t.branch);
+  if (t.prs) subBits.push(t.prs === 1 ? "1 PR" : t.prs + " PRs");
+  let nowHtml;
+  if (waiting) {
+    const since = (t.waiting && t.waiting.since) || (run && run.step && run.step.since) || t.updated;
+    nowHtml = `<span class="need">Needs you</span> <span data-since="${since}"></span><span class="line2">${esc(t.waiting ? t.waiting.kind.replace("_", " ") : "waiting")}</span>`;
+  } else if (run) {
+    const st = run.step;
+    const label = st ? st.label : run.status;
+    const since = st ? st.since : run.started || run.requested;
+    const runFor = run.started ? `run ${run.ordinal}, <span data-since="${run.started}"></span>` : `run ${run.ordinal} ${esc(run.status)}`;
+    nowHtml = `<span class="step">${esc(label)}</span> <span class="muted" data-since="${since}"></span><span class="line2">${runFor}, ${run.tools} tool calls</span>`;
+  } else {
+    const last = Math.max(t.updated, t.last_req || 0);
+    const warm = t.ctx && t.ctx.cache_exp && t.ctx.cache_exp > now();
+    nowHtml = `<span class="ink2">${t.settled ? "Settled" : "Idle"}</span> <span class="muted" data-ago="${last}"></span>` +
+      (warm ? `<span class="line2" data-tip="Resuming before the prompt cache expires reuses it, which is far cheaper.">cache warm <span data-until="${t.ctx.cache_exp}"></span></span>` : `<span class="line2">${t.reset_at && t.reset_at > now() ? "resumes after limit reset" : ""}</span>`);
+  }
+  let ctxHtml = "";
+  if (t.ctx && t.ctx.max > 0) {
+    const p = Math.min(100, (t.ctx.used / t.ctx.max) * 100);
+    const cls = p > 90 ? "crit" : p > 70 ? "warn" : "";
+    ctxHtml = `<div class="ctx" data-tip="Context in use: <b>${full(t.ctx.used)}</b> of ${full(t.ctx.max)} tokens"><span class="meter"><b class="${cls}" style="width:${p.toFixed(1)}%"></b></span><span class="num">${Math.round(p)}%</span></div>`;
+  } else ctxHtml = '<div class="ctx"></div>';
+  const td = t.today;
+  const tokHtml = td && td.n
+    ? `<div class="tok num" data-tip="Today: <b>${full(td.t[1])}</b> output, ${full(td.t[0])} input, ${full(td.t[2])} cache read, ${full(td.t[3] + td.t[4])} cache write, ${full(td.n)} requests">${compact(td.t[1])}<small>${compact(tokTotal(td.t))} total</small></div>`
+    : '<div class="tok muted">none</div>';
+  const lastTs = Math.max(t.updated, t.last_req || 0, run && run.step ? run.step.since : 0);
+  return {
+    key: t.id, depth, live: !!run,
+    html: `<span class="lamp ${lamp}" aria-hidden="true"></span>
+      <div class="who">${cordsHtml(depth, trail, last, fam)}<div class="names"><div class="t" title="${esc(t.title)}">${esc(t.title)}</div><div class="sub">${esc(subBits.join(", "))}</div></div></div>
+      <div class="model">${sw(fam)}${esc(modelName(model))}${eff ? `<span class="eff">${esc(eff)}</span>` : ""}${t.fast ? '<span class="eff">fast</span>' : ""}</div>
+      <div class="now">${nowHtml}</div>${ctxHtml}${tokHtml}
+      <div class="ago num" data-ago="${lastTs}"></div>`,
+  };
+}
+
+function subRow(n, depth, trail, last) {
+  const s = n.s;
+  const fam = family(s.model);
+  const live = s.status === "running";
+  const lamp = live ? "on" : s.status === "failed" ? "need" : "done";
+  let nowHtml;
+  if (live) nowHtml = `<span class="step">Working</span> <span class="muted" data-since="${s.started || s.updated}"></span><span class="line2">${s.origin === "provider_native" ? "built-in subagent" : "T3 subagent"}</span>`;
+  else {
+    const took = s.started && s.completed ? dur(s.completed - s.started) : "";
+    const word = s.status === "completed" ? "Done" : s.status.charAt(0).toUpperCase() + s.status.slice(1);
+    nowHtml = `<span class="${s.status === "failed" ? "need" : "ink2"}">${word}</span> <span class="muted" data-ago="${s.completed || s.updated}"></span><span class="line2">${took ? "took " + took : ""}</span>`;
+  }
+  return {
+    key: n.id, depth, live,
+    html: `<span class="lamp ${lamp}" aria-hidden="true"></span>
+      <div class="who">${cordsHtml(depth, trail, last, fam)}<div class="names"><div class="t">${esc(s.title || "Subagent")}</div><div class="sub">subagent</div></div></div>
+      <div class="model">${sw(fam)}${esc(modelName(s.model))}</div>
+      <div class="now">${nowHtml}</div><div class="ctx"></div><div class="tok muted"></div>
+      <div class="ago num" data-ago="${s.updated}"></div>`,
+  };
+}
+
+function keyed(container, items) {
+  const existing = new Map();
+  for (const el of container.children) existing.set(el.dataset.key, el);
+  let prev = null;
+  const seen = new Set();
+  for (const it of items) {
+    seen.add(it.key);
+    let el = existing.get(it.key);
+    if (!el) {
+      el = document.createElement("div");
+      el.dataset.key = it.key;
+      el.setAttribute("role", "listitem");
+      el.className = "row";
+      if (S.boardReady) { el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1300); }
+    }
+    el.classList.toggle("depth0", it.depth === 0);
+    if (el._html !== it.html) { el.innerHTML = it.html; el._html = it.html; }
+    const want = prev ? prev.nextSibling : container.firstChild;
+    if (want !== el) container.insertBefore(el, want);
+    prev = el;
+  }
+  for (const [k, el] of existing) if (!seen.has(k)) el.remove();
+}
+
+function renderBoard() {
+  const L = S.live; if (!L) return;
+  const tree = buildTree(L);
+  const items = tree.map(({ n, depth, trail, last }) => (n.kind === "sub" ? subRow(n, depth, trail, last) : threadRow(n, depth, trail, last, L)));
+  const board = $("board");
+  if (!items.length) board.innerHTML = '<div class="empty">No T3 threads were active in the last three hours.</div>';
+  else { if (board.querySelector(".empty")) board.innerHTML = ""; keyed(board, items); }
+
+  const out = [];
+  for (const o of L.outside) {
+    const fam = family(o.model);
+    out.push({ key: "o:" + o.id, depth: 0, html: `<span class="lamp ${o.active ? "on" : ""}" aria-hidden="true"></span>
+      <div class="who"><div class="names"><div class="t">${esc(o.label)}</div><div class="sub">${esc(APPS[o.app] || o.app)}${o.cwd && o.cwd !== o.label ? ", " + esc(o.cwd) : ""}</div></div></div>
+      <div class="model">${sw(fam)}${esc(modelName(o.model))}</div>
+      <div class="now">${o.active ? '<span class="step">Working</span>' : '<span class="ink2">Idle</span>'} <span class="muted" data-ago="${o.last}"></span></div>
+      <div class="ctx"></div>
+      <div class="tok num">${compact(o.today.t[1])}<small>${compact(tokTotal(o.today.t))} total</small></div>
+      <div class="ago num" data-ago="${o.last}"></div>` });
+  }
+  if (L.notetaker) {
+    const nt = L.notetaker;
+    out.push({ key: "o:notetaker", depth: 0, html: `<span class="lamp ${nt.active ? "on" : ""}" aria-hidden="true"></span>
+      <div class="who"><div class="names"><div class="t">claude-mem note-taker</div><div class="sub">writes memory notes after your sessions, ${full(nt.today.n)} calls today</div></div></div>
+      <div class="model">${sw(2)}Haiku</div>
+      <div class="now">${nt.active ? '<span class="step">Writing notes</span>' : '<span class="ink2">Idle</span>'} <span class="muted" data-ago="${nt.last}"></span></div>
+      <div class="ctx"></div>
+      <div class="tok num">${compact(nt.today.t[1])}<small>${compact(tokTotal(nt.today.t))} total</small></div>
+      <div class="ago num" data-ago="${nt.last}"></div>` });
+  }
+  const outside = $("outside");
+  if (out.length) {
+    if (!outside.querySelector(".group-label")) { outside.innerHTML = '<div class="group-label" data-key="label">Outside T3, last 30 minutes</div>'; }
+    const box = outside.querySelector(".rowsbox") || (() => { const d = document.createElement("div"); d.className = "rowsbox"; outside.appendChild(d); return d; })();
+    keyed(box, out);
+  } else outside.innerHTML = "";
+  S.boardReady = true;
+}
+
+// ------------------------------------------------------------------ window
+function renderWindow() {
+  const L = S.live; if (!L) return;
+  const w = L.window, el = $("window");
+  if (!w) { el.innerHTML = "<h2>5-hour window</h2><p class='muted'>Reading usage.</p>"; return; }
+  const cap = w.cap;
+  const share = (v, total) => { const p = (v / total) * 100; return p > 0 && p < 1 ? "<1%" : Math.round(p) + "%"; };
+  const famRow = (vals, total) => vals.map((v, i) => v > 0 ? `<span>${sw(i)}${FAM[i]} ${share(v, total)}</span>` : "").join("");
+  let h = "<h2>5-hour window</h2>";
+  if (!w.active) {
+    h += `<div class="hero"><span class="big din">0</span><span class="pct din">%</span><span class="of">No window open. The next request starts one, and it lasts five hours.</span></div>`;
+    if (cap) h += `<dl class="facts"><dt>Last limit hit</dt><dd>${hhmm(cap.hit_ms)}, ${dur(now() - cap.hit_ms)} ago</dd></dl>`;
+  } else {
+    const used = w.used;
+    if (cap && w.pct != null) {
+      const pct = w.pct * 100;
+      const scaleMax = Math.max(100, pct * 1.05);
+      h += `<div class="hero"><span class="big din num">${pct < 10 ? pct.toFixed(1) : Math.round(pct)}</span><span class="pct din">%</span>
+        <span class="of">of the usage that reached the limit at ${hhmm(cap.hit_ms)}${now() - cap.hit_ms > 20 * 3600e3 ? " on an earlier day" : ""}</span></div>`;
+      const segs = w.by_family.map((v, i) => v > 0 ? `<i class="m${i}" style="width:${((v / cap.used) * 100 / scaleMax * 100).toFixed(2)}%;background:var(--m${i})" data-tip="<b>${FAM[i]}</b>: ${((v / cap.used) * 100).toFixed(1)}% of the cap"></i>` : "").join("");
+      h += `<div class="wbar">${segs}<span class="capline" style="left:calc(${(100 / scaleMax * 100).toFixed(2)}% - 1px)" data-tip="The level at which you hit the limit last time"></span></div>
+        <div class="wscale"><span>0</span><span>limit, last time</span></div>`;
+      h += `<div class="legend">${famRow(w.by_family, used)}</div>`;
+    } else {
+      h += `<div class="hero"><span class="big din num">${compact(w.calls)}</span><span class="of">requests in this window. No limit hit has been recorded yet, so there is nothing to compare against.</span></div>`;
+      h += `<div class="legend">${famRow(w.by_family, used)}</div>`;
+    }
+    const left = w.end_ms - now();
+    h += `<dl class="facts">
+      <dt>Resets</dt><dd>${hhmm(w.end_ms)}, in <span data-until="${w.end_ms}">${dur(left)}</span>${w.anchored ? ", as recorded by T3" : ""}</dd>
+      <dt>Opened</dt><dd>${hhmm(w.start_ms)}${w.anchored ? "" : ", estimated"}</dd>
+      <dt>Requests</dt><dd class="num">${full(w.calls)}</dd>
+      ${w.observer > 0 ? `<dt>Note-taker</dt><dd>${((w.observer / used) * 100).toFixed(1)}% of this window</dd>` : ""}
+    </dl>`;
+  }
+  h += `<p class="fine">Estimated from Claude Code and T3 activity on this Mac, weighting each model by its list price. Chat on claude.ai and other devices also count toward the limit but are not visible here.</p>`;
+  el.innerHTML = h;
+}
+
+// ------------------------------------------------------------------ feed
+const KEY_KINDS = new Set(["run_start", "run_end", "waiting", "sub_start", "sub_end", "approval", "pr", "thread_new", "handoff", "limit", "session", "settled"]);
+function feedText(f) {
+  const short = (s) => (s.length > 38 ? s.slice(0, 36).trimEnd() + "…" : s);
+  const who = f.tt ? `<b title="${esc(f.tt)}">${esc(short(f.tt))}</b>` : "<b>A thread</b>";
+  const m = f.model ? ` on ${sw(family(f.model))}${esc(modelName(f.model))}` : "";
+  switch (f.k) {
+    case "run_start": return { k: "start", t: `${who} started run ${f.n ?? ""}${m}` };
+    case "run_end": {
+      if (f.status === "completed") return { k: "end", t: `${who} finished run ${f.n ?? ""}${f.dur ? " in " + dur(f.dur) : ""}` };
+      return { k: "alert", t: `${who} run ${f.n ?? ""} ${esc(f.status)}${f.dur ? " after " + dur(f.dur) : ""}` };
+    }
+    case "waiting": return { k: "alert", t: `${who} is waiting on you` };
+    case "approval": return { k: "alert", t: `${who} asks for ${esc(f.title || "approval")}` };
+    case "sub_start": return { k: "start", t: `${who} started subagent <b>${esc(f.title || "")}</b>${m}` };
+    case "sub_end": {
+      const ok = f.status === "completed";
+      return { k: ok ? "end" : "alert", t: `Subagent <b>${esc(f.title || "")}</b> ${ok ? "finished" : esc(f.status)}${f.dur ? (ok ? " in " : " after ") + dur(f.dur) : ""}${f.tt ? ` <span class="muted">for ${esc(f.tt)}</span>` : ""}` };
+    }
+    case "tools": {
+      const list = (f.tools || []).map(([n, c]) => esc(n) + (c > 1 ? " ×" + c : "")).join(", ");
+      return { k: "tools", t: `${who} used ${list}` };
+    }
+    case "pr": return { k: "pr", t: `${who} linked PR #${f.n} <span class="muted">${esc((f.repo || "").split("/").pop())}</span>` };
+    case "thread_new": return { k: "start", t: `New thread <b>${esc(f.title || f.tt || "")}</b>${f.up ? ` <span class="muted">from ${esc(f.up)}</span>` : ""}` };
+    case "handoff": return { k: "other", t: `${who} handed its context to a fresh session` };
+    case "settled": return { k: "end", t: `${who} settled` };
+    case "limit": return { k: "alert", t: "<b>Usage limit reached</b>" };
+    case "session": return { k: "start", t: `${esc(EP[f.app] || "Claude")} session <b>${esc(f.title || "")}</b> became active${m}` };
+    default: return { k: "other", t: esc(f.k) };
+  }
+}
+function renderFeed() {
+  const list = $("feed");
+  let items = [...S.feed.values()];
+  if (S.feedFilter === "key") items = items.filter((f) => KEY_KINDS.has(f.k));
+  items.sort((a, b) => b.ts - a.ts);
+  items = items.slice(0, 160);
+  const existing = new Map();
+  for (const el of list.children) existing.set(el.dataset.key, el);
+  let prev = null;
+  const seen = new Set();
+  for (const f of items) {
+    seen.add(f.id);
+    const { k, t } = feedText(f);
+    const html = `<span class="time num">${hhmmss(f.ts)}</span><span class="k ${k}" aria-hidden="true"></span><span class="what">${t}</span>`;
+    let el = existing.get(f.id);
+    if (!el) {
+      el = document.createElement("li"); el.dataset.key = f.id;
+      if (S.feedReady && S.fresh.has(f.id)) { el.className = "fresh"; setTimeout(() => el.classList.remove("fresh"), 1700); }
+    }
+    if (el._html !== html) { el.innerHTML = html; el._html = html; }
+    const want = prev ? prev.nextSibling : list.firstChild;
+    if (want !== el) list.insertBefore(el, want);
+    prev = el;
+  }
+  for (const [k, el] of existing) if (!seen.has(k)) el.remove();
+  if (!items.length) list.innerHTML = '<li class="muted" data-key="none"><span></span><span></span><span>Nothing yet. Events show up here as T3 threads and Claude sessions work.</span></li>';
+  S.fresh.clear();
+  S.feedReady = true;
+}
+document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => {
+  S.feedFilter = b.dataset.f;
+  document.querySelectorAll(".seg button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  $("feed").innerHTML = ""; renderFeed();
+}));
+
+// ------------------------------------------------------------------ six hours
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function renderSpark() {
+  const L = S.live; if (!L || !L.spark || !L.spark.w) return;
+  const box = $("spark");
+  const width = Math.max(320, box.clientWidth);
+  const cap = L.window && L.window.cap ? L.window.cap.used : 0;
+  const key = width + "|" + JSON.stringify(L.spark.w) + "|" + cap + "|" + (L.window && L.window.start_ms) + "|" + document.documentElement.getAttribute("data-theme");
+  if (key === S.sparkKey) return;
+  S.sparkKey = key;
+  const H = 150, padL = 40, padB = 22, padT = 8;
+  const n = L.spark.w.length, step = L.spark.step, start = L.spark.start;
+  const totals = L.spark.w.map((c) => c.reduce((a, b) => a + b, 0));
+  const unit = cap > 0 ? cap / 100 : 0; // percent of cap per bucket
+  const vals = totals.map((v) => (unit ? v / unit : v));
+  let max = Math.max(...vals, unit ? 1 : 1e-9);
+  const niceStep = (m) => { const p = Math.pow(10, Math.floor(Math.log10(m))); const r = m / p; return (r <= 1.5 ? 0.5 : r <= 3 ? 1 : r <= 6 ? 2 : 5) * p; };
+  const gstep = niceStep(max / 2.5);
+  max = Math.ceil(max / gstep) * gstep;
+  const plotW = width - padL - 4, plotH = H - padB - padT;
+  const colW = plotW / n, barW = Math.min(24, Math.max(2, colW - 2));
+  const y = (v) => padT + plotH - (v / max) * plotH;
+  let s = `<svg viewBox="0 0 ${width} ${H}" height="${H}" role="img" aria-label="Usage in five-minute steps over the last six hours">`;
+  for (let g = 0; g <= max + 1e-9; g += gstep) {
+    const yy = y(g);
+    s += `<line class="${g === 0 ? "base-line" : "grid-line"}" x1="${padL}" x2="${width - 4}" y1="${yy}" y2="${yy}"/>`;
+    s += `<text class="axis" x="${padL - 6}" y="${yy + 3.5}" text-anchor="end">${unit ? (g < 1 && g > 0 ? g.toFixed(1) : Math.round(g)) + "%" : ""}</text>`;
+  }
+  for (let i = 0; i <= n; i += 12) {
+    const x = padL + i * colW;
+    s += `<text class="axis" x="${x}" y="${H - 6}" text-anchor="${i === 0 ? "start" : i === n ? "end" : "middle"}">${hhmm(start + i * step)}</text>`;
+  }
+  if (L.window && L.window.active && L.window.start_ms > start) {
+    const x = padL + ((L.window.start_ms - start) / step) * colW;
+    s += `<line class="mark-line" x1="${x}" x2="${x}" y1="${padT}" y2="${padT + plotH}"/><text class="axis" x="${x + 4}" y="${padT + 10}">window opened ${hhmm(L.window.start_ms)}</text>`;
+  }
+  for (let i = 0; i < n; i++) {
+    const cell = L.spark.w[i];
+    const x = padL + i * colW + (colW - barW) / 2;
+    let acc = 0;
+    const tot = totals[i];
+    const segs = [];
+    for (let f = 0; f < 4; f++) {
+      const v = unit ? cell[f] / unit : cell[f];
+      if (v <= 0) continue;
+      const y0 = y(acc), y1 = y(acc + v);
+      acc += v;
+      segs.push({ f, y0, y1 });
+    }
+    segs.forEach((g, j) => {
+      const top = j === segs.length - 1;
+      const gap = j > 0 ? 1 : 0;
+      const hgt = Math.max(1, g.y0 - g.y1 - gap);
+      const yTop = g.y1;
+      const r = top ? Math.min(3, hgt / 2, barW / 2) : 0;
+      const d = r ? `M${x},${yTop + hgt} V${yTop + r} Q${x},${yTop} ${x + r},${yTop} H${x + barW - r} Q${x + barW},${yTop} ${x + barW},${yTop + r} V${yTop + hgt} Z` : `M${x},${yTop + hgt} V${yTop} H${x + barW} V${yTop + hgt} Z`;
+      s += `<path d="${d}" style="fill:var(--m${g.f})"/>`;
+    });
+    if (tot > 0) {
+      const parts = cell.map((v, f) => (v > 0 ? `${FAM[f]} ${unit ? ((v / unit)).toFixed(2) + "%" : ""}` : "")).filter(Boolean).join("<br>");
+      const tipTxt = `<b>${hhmm(start + i * step)} to ${hhmm(start + (i + 1) * step)}</b><br>${unit ? "Share of last cap: " + (tot / unit).toFixed(2) + "%<br>" : ""}${parts}${L.spark.obs[i] > 0 ? "<br>Note-taker: " + Math.round((L.spark.obs[i] / tot) * 100) + "%" : ""}`;
+      s += `<rect class="hit" x="${padL + i * colW}" y="${padT}" width="${colW}" height="${plotH}" data-tip="${esc(tipTxt)}"/>`;
+    }
+  }
+  s += "</svg>";
+  box.innerHTML = s;
+  const fams = [0, 1, 2, 3].filter((f) => L.spark.w.some((c) => c[f] > 0));
+  $("sparkLegend").innerHTML = (unit ? '<span class="muted">Each column is five minutes, as a share of the last limit</span>' : '<span class="muted">Each column is five minutes of weighted usage</span>') + fams.map((f) => `<span>${sw(f)}${FAM[f]}</span>`).join("");
+}
+let resizeT = 0;
+addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => { S.sparkKey = ""; renderSpark(); renderDays(true); }, 150); });
+
+// ------------------------------------------------------------------ days
+function stripSvg(d, isToday, maxW, width) {
+  const H = 46, n = 24, colW = width / n, barW = Math.min(16, Math.max(3, colW - 3));
+  let s = `<svg viewBox="0 0 ${width} ${H}" height="${H}" role="img" aria-label="Usage by hour">`;
+  if (isToday) {
+    const d0 = local(now());
+    const xNow = ((d0.getUTCHours() + d0.getUTCMinutes() / 60) / 24) * width;
+    s += `<line class="grid-line" x1="${xNow}" x2="${xNow}" y1="0" y2="${H}"/>`;
+  }
+  s += `<line class="base-line" x1="0" x2="${width}" y1="${H - 0.5}" y2="${H - 0.5}"/>`;
+  for (let h = 0; h < n; h++) {
+    const cell = d.hours[h];
+    const tot = cell.reduce((a, b) => a + b, 0);
+    if (!(tot > 0 && maxW > 0)) continue;
+    const x = h * colW + (colW - barW) / 2;
+    const base = H - 1;
+    let acc = 0;
+    const segs = [];
+    for (let f = 0; f < 4; f++) if (cell[f] > 0) segs.push(f);
+    segs.forEach((f, j) => {
+      const y0 = base - (acc / maxW) * (base - 2);
+      acc += cell[f];
+      const y1 = base - (acc / maxW) * (base - 2);
+      const hgt = Math.max(1, y0 - y1 - (j > 0 ? 1 : 0));
+      const r = j === segs.length - 1 ? Math.min(3, hgt / 2, barW / 2) : 0;
+      const p = r ? `M${x},${y1 + hgt} V${y1 + r} Q${x},${y1} ${x + r},${y1} H${x + barW - r} Q${x + barW},${y1} ${x + barW},${y1 + r} V${y1 + hgt} Z` : `M${x},${y1 + hgt} V${y1} H${x + barW} V${y1 + hgt} Z`;
+      s += `<path d="${p}" style="fill:var(--m${f})"/>`;
+    });
+    const tipTxt = `<b>${String(h).padStart(2, "0")}:00 to ${String(h + 1).padStart(2, "0")}:00</b><br>${full(d.hours_n[h])} requests<br>` + segs.map((f) => `${FAM[f]} ${Math.round((cell[f] / tot) * 100)}%`).join(", ");
+    s += `<rect class="hit" x="${h * colW}" y="0" width="${colW}" height="${H}" data-tip="${esc(tipTxt)}"/>`;
+  }
+  return s + "</svg>";
+}
+
+function dedupePrs(days) {
+  const m = new Map();
+  days.forEach((d, i) => {
+    for (const pr of d.t3.prs) {
+      const k = pr.repo + "#" + pr.n;
+      const e = m.get(k) || { ...pr, threads: new Set(), day: i };
+      e.threads.add(pr.thread);
+      if (pr.linked > e.linked) { Object.assign(e, { ...pr, threads: e.threads, day: i }); }
+      m.set(k, e);
+    }
+  });
+  return [...m.values()].sort((a, b) => b.linked - a.linked);
+}
+
+function renderDays(force) {
+  const D = S.days; if (!D || !D.days) return;
+  if (!force && S.rawDaysRendered === S.rawDays) return;
+  S.rawDaysRendered = S.rawDays;
+  const days = D.days;
+  const names = days.map((d, i) => ["Today", "Yesterday"][i] || dayParts(d.day).wd);
+  const maxW = Math.max(1e-9, ...days.flatMap((d) => d.hours.map((c) => c.reduce((a, b) => a + b, 0))));
+  const famsOf = (d) => { const f = [0, 0, 0, 0]; for (const [m, u] of Object.entries(d.models)) f[family(m)] += u.w; return f; };
+  const allFams = [0, 1, 2, 3].filter((f) => days.some((d) => famsOf(d)[f] > 0));
+  $("daysLegend").innerHTML = allFams.map((f) => `<span>${sw(f)}${FAM[f]}</span>`).join("");
+
+  let h = "";
+  days.forEach((d, i) => {
+    const p = dayParts(d.day);
+    const out = d.total.t[1];
+    h += `<div class="dayrow"><div class="dlabel"><b>${esc(names[i])}</b><small>${esc(p.short)}</small></div>
+      <div class="dstrip chart" data-i="${i}"></div>
+      <div class="dsum${out ? "" : " zero"}"><span class="big din num">${compact(out)}</span><small>output tokens</small></div></div>`;
+  });
+  h += `<div class="daxis"><div></div><div>${[0, 3, 6, 9, 12, 15, 18, 21, 24].map((x) => `<span style="left:${(x / 24) * 100}%">${String(x % 24).padStart(2, "0")}</span>`).join("")}</div><div></div></div>`;
+
+  // Comparison table: one column per day.
+  const at = hhmm(now());
+  const todayNow = days[0] ? days[0].by_now : 0;
+  const cell = (v, zero, extra) => `<td class="${zero ? "zero" : ""}">${v}${extra ? `<small>${extra}</small>` : ""}</td>`;
+  const rows = [
+    ["Output tokens", (d) => cell(compact(d.total.t[1]), !d.total.t[1])],
+    ["All tokens", (d) => { const t = tokTotal(d.total.t); return cell(compact(t), !t, t ? Math.round((d.total.t[2] / t) * 100) + "% from cache" : ""); }],
+    ["Requests", (d) => cell(full(d.total.n), !d.total.n)],
+    ["Active time", (d) => cell(d.active_min ? dur(d.active_min * 60000) : "none", !d.active_min)],
+    [`Usage by ${at}`, (d, i) => {
+      if (!todayNow) return cell(d.by_now ? "some" : "none", !d.by_now);
+      const pct = Math.round((d.by_now / todayNow) * 100);
+      if (!d.by_now) return cell("none", true);
+      return cell(i === 0 ? "100%" : pct + "%", false, i === 0 ? "baseline" : "of today");
+    }],
+    ["Model mix", (d) => {
+      const f = famsOf(d); const fw = f.reduce((a, b) => a + b, 0);
+      if (!fw) return cell("none", true);
+      const tipTxt = f.map((v, k) => (v > 0 ? `${FAM[k]} ${Math.round((v / fw) * 100)}%` : "")).filter(Boolean).join("<br>");
+      return `<td data-tip="${esc(tipTxt)}"><span class="split" role="img" aria-label="${esc(tipTxt.replace(/<br>/g, ", "))}">` + f.map((v, k) => (v > 0 ? `<i style="width:${(v / fw) * 100}%;background:var(--m${k})"></i>` : "")).join("") + "</span></td>";
+    }],
+    ["T3 runs", (d) => { const bad = (d.t3.by_status.failed || 0) + (d.t3.by_status.interrupted || 0); return cell(full(d.t3.runs), !d.t3.runs, bad ? bad + " failed" : ""); }],
+    ["Run time", (d) => cell(d.t3.run_ms ? dur(d.t3.run_ms) : "none", !d.t3.run_ms)],
+    ["Threads worked in", (d) => cell(full(d.t3.threads_touched), !d.t3.threads_touched, d.t3.created ? d.t3.created + " new" : "")],
+    ["Subagents", (d) => {
+      const outside = Object.values(d.outside_subs).reduce((a, b) => a + b, 0);
+      const n = d.t3.subagents + outside;
+      const by = Object.entries(d.t3.sub_models).map(([m, c]) => `${modelName(m)} ${c}`).join(", ");
+      return `<td class="${n ? "" : "zero"}" data-tip="${esc((by || "none in T3") + (outside ? "<br>" + outside + " outside T3" : ""))}">${full(n)}${d.t3.sub_failed ? `<small>${d.t3.sub_failed} failed</small>` : ""}</td>`;
+    }],
+    ["PRs linked", (d) => { const n = new Set(d.t3.prs.map((p) => p.repo + "#" + p.n)).size; return cell(full(n), !n); }],
+    ["Limit reached", (d) => cell(d.hits.length ? d.hits.map(hhmm).join(", ") : "no", !d.hits.length)],
+  ];
+  h += `<div class="cmpwrap"><table class="cmpt"><thead><tr><th></th>${days.map((d, i) => `<th>${esc(names[i])}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map(([label, fn]) => `<tr><td>${esc(label)}</td>${days.map((d, i) => fn(d, i)).join("")}</tr>`).join("") + "</tbody></table></div>";
+
+  // Where the usage went, per day.
+  h += `<div class="dcols">` + days.map((d, i) => {
+    let col = `<div><h3>Where ${i === 0 ? "today's" : i === 1 ? "yesterday's" : esc(names[i]) + "'s"} usage went</h3>`;
+    if (!d.sources.length) return col + `<p class="daynone">Nothing recorded.</p></div>`;
+    const fw = famsOf(d).reduce((a, b) => a + b, 0) || 1;
+    const maxS = Math.max(...d.sources.map((s) => s.total.w)) || 1;
+    col += `<ol class="list">` + d.sources.slice(0, 7).map((s) => {
+      const ctx = s.app === "t3" ? (s.up ? "under " + s.up : s.project || "T3") : (APPS[s.app] || s.app) + (s.project && s.project !== s.label ? ", " + s.project : "");
+      const tipTxt = `<b>${esc(s.label)}</b><br>${full(s.total.t[1])} output tokens, ${full(s.total.n)} requests${s.sub.n ? "<br>" + Math.round((s.sub.w / s.total.w) * 100) + "% by subagents" : ""}${s.sessions > 1 ? "<br>" + s.sessions + " sessions" : ""}`;
+      return `<li data-tip="${esc(tipTxt)}"><div class="lbl"><span>${esc(s.label)}</span><small>${esc(ctx)}</small><div class="bar"><i style="width:${(s.total.w / maxS) * 100}%"></i></div></div><div class="v num">${Math.round((s.total.w / fw) * 100)}%<br>${compact(s.total.t[1])} out</div></li>`;
+    }).join("") + "</ol>";
+    if (d.sources.length > 7 || d.sources_more) col += `<p class="fine">${d.sources.length - 7 + d.sources_more > 0 ? d.sources.length - 7 + d.sources_more + " more in the Tokens table" : ""}</p>`;
+    return col + "</div>";
+  }).join("") + "</div>";
+
+  // Pull requests linked in the three days, one line per PR.
+  const prs = dedupePrs(days);
+  if (prs.length) {
+    h += `<h3>Pull requests linked</h3><div class="tablewrap"><table><thead><tr><th>PR</th><th style="text-align:left">Title</th><th style="text-align:left">Repository</th><th style="text-align:left">Threads</th><th>State</th><th>Linked</th></tr></thead><tbody>` +
+      prs.slice(0, 12).map((pr) => {
+        const st = pr.draft ? "draft" : (pr.state || "").toLowerCase();
+        return `<tr><td class="num">#${pr.n}</td><td style="text-align:left;white-space:normal;min-width:240px">${esc(pr.title || "")}</td><td style="text-align:left">${esc(pr.repo.split("/").pop())}</td><td style="text-align:left;max-width:260px;overflow:hidden;text-overflow:ellipsis">${esc([...pr.threads].join(", "))}</td><td><span class="state ${esc(st)}">${esc(st)}</span></td><td>${esc(names[pr.day])} ${hhmm(pr.linked)}</td></tr>`;
+      }).join("") + "</tbody></table></div>" + (prs.length > 12 ? `<p class="fine">and ${prs.length - 12} more</p>` : "");
+  }
+  $("days").innerHTML = h;
+  for (const el of document.querySelectorAll(".dstrip")) {
+    const i = Number(el.dataset.i);
+    el.innerHTML = stripSvg(days[i], i === 0, maxW, Math.max(200, el.clientWidth));
+  }
+  renderLedger();
+}
+
+// ------------------------------------------------------------------ ledger
+function renderLedger() {
+  const D = S.days; if (!D || !D.days) return;
+  const tabs = $("ledgerTabs");
+  const names = ["Today", "Yesterday"];
+  tabs.innerHTML = D.days.map((d, i) => `<button type="button" role="tab" aria-selected="${i === S.ledgerDay}" data-i="${i}">${esc(names[i] || dayParts(d.day).wd)}</button>`).join("");
+  tabs.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { S.ledgerDay = Number(b.dataset.i); renderLedger(); }));
+  const d = D.days[S.ledgerDay];
+  if (!d || !d.total.n) { $("ledger").innerHTML = `<p class="muted">No requests recorded on this day.</p>`; return; }
+  const totalW = d.total.w || 1;
+  const hit = (t) => { const inAll = t[0] + t[2] + t[3] + t[4]; return inAll ? Math.round((t[2] / inAll) * 100) + "%" : ""; };
+  const row = (label, u, extra) => `<tr><td>${label}${extra || ""}</td><td>${full(u.n)}</td><td>${compact(u.t[0])}</td><td>${compact(u.t[2])}</td><td>${compact(u.t[3] + u.t[4])}</td><td>${compact(u.t[1])}</td><td>${hit(u.t)}</td><td>${Math.round((u.w / totalW) * 100)}%</td></tr>`;
+  const head = `<thead><tr><th></th><th>Requests</th><th>Input</th><th>Cache read</th><th>Cache write</th><th>Output</th><th>Cache hits</th><th data-tip="Share of the day's usage, weighting each model by its list price">Share</th></tr></thead>`;
+  const models = Object.entries(d.models).sort((a, b) => b[1].w - a[1].w);
+  let h = `<div class="tablewrap"><table>${head}<tbody>` + models.map(([m, u]) => row(`${sw(family(m))}${esc(modelName(m))}`, u)).join("") + `</tbody><tfoot>${row("All models", d.total)}</tfoot></table></div>`;
+  h += `<h3>By thread and session</h3><div class="tablewrap"><table>${head.replace("<th></th>", "<th>Where</th>")}<tbody>` +
+    d.sources.map((s) => row(esc(s.label), s.total, `<span class="apptag">${esc(APPS[s.app] || s.app)}</span>`)).join("") + `</tbody></table></div>` +
+    (d.sources_more ? `<p class="fine">${d.sources_more} smaller sources are not listed.</p>` : "");
+  $("ledger").innerHTML = h;
+}
+
+// ------------------------------------------------------------------ footer
+function renderFoot() {
+  const L = S.live; if (!L) return;
+  const h = L.health;
+  $("foot").innerHTML = `<span>Reads T3 and Claude Code files read-only.</span>
+    <span>T3 event <span class="num">${full(h.seq)}</span>, ${full(h.files)} transcript files tracked, ${h.launch_links} launch links.</span>
+    <span>Switchboard itself: <b>${(h.mem / 1048576).toFixed(1)} MB</b> memory, ${h.cpu}% CPU, up ${dur(h.uptime * 1000)}.</span>`;
+}
+
+// ------------------------------------------------------------------ ticking
+function tick() {
+  const t = now();
+  for (const el of document.querySelectorAll("[data-since]")) { const v = dur(t - Number(el.dataset.since)); if (el.textContent !== v) el.textContent = v; }
+  for (const el of document.querySelectorAll("[data-until]")) { const v = dur(Number(el.dataset.until) - t); if (el.textContent !== v) el.textContent = v; }
+  for (const el of document.querySelectorAll("[data-ago]")) {
+    const ms = t - Number(el.dataset.ago);
+    const a = ago(ms);
+    const v = Number(el.dataset.ago) ? (a === "now" || el.classList.contains("ago") ? a : a + " ago") : "";
+    if (el.textContent !== v) el.textContent = v;
+  }
+  renderStatus();
+}
+setInterval(tick, 1000);
+
+// ------------------------------------------------------------------ stream
+function onLive(L) {
+  S.live = L; S.skew = L.now - Date.now(); S.lastMsg = Date.now();
+  renderHeader(); renderReadout(); renderBoard(); renderWindow(); renderSpark(); renderFoot(); tick();
+}
+function onDays(raw) { S.rawDays = raw; S.days = JSON.parse(raw); renderDays(false); }
+function onFeed(items, fresh) {
+  for (const f of items) { if (fresh && !S.feed.has(f.id)) S.fresh.add(f.id); S.feed.set(f.id, f); }
+  if (S.feed.size > 600) { const sorted = [...S.feed.values()].sort((a, b) => a.ts - b.ts); for (const f of sorted.slice(0, S.feed.size - 600)) S.feed.delete(f.id); }
+  renderFeed();
+}
+function connect() {
+  const params = new URLSearchParams(location.search);
+  if (params.has("snapshot")) {
+    fetch("/api/state").then((r) => r.json()).then((s) => { S.connected = true; onLive(s.live); onDays(JSON.stringify(s.days)); onFeed(s.feed, false); });
+    return;
+  }
+  const es = new EventSource("/events");
+  es.addEventListener("hello", (e) => {
+    S.connected = true;
+    const s = JSON.parse(e.data);
+    S.feed.clear(); $("feed").innerHTML = ""; S.feedReady = false;
+    // Live first: it carries the time zone every other panel formats with.
+    onLive(s.live); onDays(JSON.stringify(s.days)); onFeed(s.feed, false);
+  });
+  es.addEventListener("live", (e) => { S.connected = true; onLive(JSON.parse(e.data)); });
+  es.addEventListener("days", (e) => onDays(e.data));
+  es.addEventListener("feed", (e) => onFeed(JSON.parse(e.data), true));
+  es.onerror = () => { S.connected = false; renderStatus(); $("hdrLamp").className = "lamp"; };
+  es.onopen = () => { S.connected = true; };
+}
+connect();
+</script>
+</body>
+</html>

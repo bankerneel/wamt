@@ -428,7 +428,15 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
         td.runs_live = t.active.len();
         td.subagents = t.subs.iter().filter(|s| s.started.unwrap_or(s.updated) >= day0).count();
         td.subagents_live = t.subs.iter().filter(|s| LIVE_RUN_LIKE.contains(&s.status.as_str())).count();
-        td.prs = t.threads.values().flat_map(|th| th.prs.iter()).filter(|p| p.linked >= day0).count();
+        // One PR linked from several threads counts once.
+        td.prs = t
+            .threads
+            .values()
+            .flat_map(|th| th.prs.iter())
+            .filter(|p| p.linked >= day0)
+            .map(|p| (p.repo.as_str(), p.n))
+            .collect::<HashSet<_>>()
+            .len();
         td.waiting = t.waiting.len() + t.active.iter().filter(|r| r.status == "waiting").count();
     }
     let window = sh.tx.window.as_ref().map(|w| WindowOut {
