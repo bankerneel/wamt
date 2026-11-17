@@ -115,7 +115,14 @@ pub struct WindowEst {
     pub observer: f64,
     pub calls: u32,
     pub cap: Option<CapRef>,
+    /// Weighted usage per minute over the last 30 minutes of this window.
+    pub rate_per_min: f64,
+    /// When the plate reaches the cap at that rate, if before the reset.
+    pub eta_ms: Option<i64>,
 }
+
+/// Minutes of recent eating the forecast looks at.
+const RATE_SPAN_MIN: i64 = 30;
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct Agg {
@@ -312,16 +319,20 @@ impl Agg {
         match wins.last() {
             Some(&(s, e, anchored)) if e > now_ms => {
                 let (w, o, n) = self.sum(s, now_ms);
+                let used: f64 = w.iter().sum();
+                let (rate_per_min, eta_ms) = self.forecast(now_ms, s, e, used);
                 WindowEst {
                     active: true,
                     start_ms: s,
                     end_ms: e,
                     anchored,
-                    used: w.iter().sum(),
+                    used,
                     by_family: w,
                     observer: o,
                     calls: n,
                     cap: self.cap_ref.clone(),
+                    rate_per_min,
+                    eta_ms,
                 }
             }
             _ => WindowEst {
@@ -334,8 +345,32 @@ impl Agg {
                 observer: 0.0,
                 calls: 0,
                 cap: self.cap_ref.clone(),
+                rate_per_min: 0.0,
+                eta_ms: None,
             },
         }
+    }
+
+    /// Eating rate over the last 30 minutes (or since the window opened, if
+    /// later, but never less than 5 minutes so one burst does not dominate)
+    /// and the time the plate would reach the last cap at that rate. The
+    /// time is None when there is no cap, no recent eating, or the reset
+    /// comes first. Already over the cap means "now".
+    fn forecast(&self, now_ms: i64, start_ms: i64, end_ms: i64, used: f64) -> (f64, Option<i64>) {
+        let from = (now_ms - RATE_SPAN_MIN * MS_PER_MIN).max(start_ms);
+        let span_min = ((now_ms - from) as f64 / MS_PER_MIN as f64).max(5.0);
+        let (w, _, _) = self.sum(from, now_ms);
+        let rate = w.iter().sum::<f64>() / span_min;
+        let Some(cap) = self.cap_ref.as_ref() else { return (rate, None) };
+        let left = cap.used - used;
+        if left <= 0.0 {
+            return (rate, Some(now_ms));
+        }
+        if rate <= 0.0 {
+            return (rate, None);
+        }
+        let eta = now_ms + (left / rate * MS_PER_MIN as f64) as i64;
+        (rate, (eta < end_ms).then_some(eta))
     }
 }
 
@@ -532,6 +567,40 @@ mod tests {
         a.mins.retain(|m, _| *m >= cut);
         let again = a.window(now, &[]);
         assert_eq!(again.start_ms, first.start_ms);
+    }
+
+    #[test]
+    fn forecast_projects_empty_time_or_makes_it_to_reset() {
+        let mut a = Agg::default();
+        let per = weight("claude-opus-5-5", &Tokens { output: 1000, ..Default::default() }, false);
+        // Window opens 10:00 UTC; cap reference worth 100 calls.
+        a.cap_ref = Some(CapRef { used: 100.0 * per, hit_ms: 0, start_ms: 0 });
+        let t0 = parse_ts_ms("2026-11-17T10:00:00Z").unwrap();
+        // One call a minute for 60 minutes: 60 used, 1 per minute.
+        for i in 0..60 {
+            let ts = crate::timeutil::iso_ms(t0 + i * MS_PER_MIN);
+            usage(&mut a, &ts, "claude-opus-5-5", 1000, &format!("f{i}"));
+        }
+        let now = t0 + 60 * MS_PER_MIN;
+        let est = a.window(now, &[]);
+        assert!((est.rate_per_min - per).abs() < 1e-6);
+        // 40 calls left at 1 a minute: empty 40 minutes from now.
+        assert_eq!(est.eta_ms, Some(now + 40 * MS_PER_MIN));
+
+        // A big cap: the reset at 15:00 comes first.
+        a.cap_ref = Some(CapRef { used: 10_000.0 * per, hit_ms: 0, start_ms: 0 });
+        assert_eq!(a.window(now, &[]).eta_ms, None);
+
+        // Idle for the last 30 minutes: no rate, no forecast.
+        a.cap_ref = Some(CapRef { used: 100.0 * per, hit_ms: 0, start_ms: 0 });
+        let later = now + 31 * MS_PER_MIN;
+        let idle = a.window(later, &[]);
+        assert_eq!(idle.rate_per_min, 0.0);
+        assert_eq!(idle.eta_ms, None);
+
+        // Already past the cap: empty now.
+        a.cap_ref = Some(CapRef { used: 10.0 * per, hit_ms: 0, start_ms: 0 });
+        assert_eq!(a.window(now, &[]).eta_ms, Some(now));
     }
 
     #[test]
