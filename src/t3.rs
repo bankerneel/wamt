@@ -133,6 +133,29 @@ pub struct RunRow {
     pub delegated: bool,
 }
 
+/// One run of a thread, for the drill-down.
+#[derive(Clone, Debug, Serialize)]
+pub struct ThreadRun {
+    pub n: i64,
+    pub status: String,
+    pub requested: i64,
+    pub started: Option<i64>,
+    pub completed: Option<i64>,
+    pub model: Option<String>,
+    pub delegated: bool,
+}
+
+/// Counts only: what one thread did inside a time range.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ThreadDetail {
+    pub runs: Vec<ThreadRun>,
+    /// Tool name -> calls, biggest first.
+    pub tools: Vec<(String, i64)>,
+    /// Turn-item type -> items, biggest first.
+    pub items: Vec<(String, i64)>,
+    pub subs: Vec<Subagent>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Waiting {
     pub thread: String,
@@ -648,6 +671,84 @@ impl T3 {
         rows.collect()
     }
 
+    /// One thread's runs, tool and item counts, and subagents in
+    /// `[from_ms, to_ms)`. Every query starts from the thread id (indexed)
+    /// and only reads the tool name and item type out of the JSON: inputs,
+    /// outputs and message text are never selected.
+    pub fn thread_detail(&self, thread: &str, from_ms: i64, to_ms: i64) -> rusqlite::Result<ThreadDetail> {
+        let (from, to) = (iso_ms(from_ms), iso_ms(to_ms));
+        let mut d = ThreadDetail::default();
+        let mut st = self.conn.prepare_cached(
+            "SELECT ordinal, status, requested_at, json_extract(payload_json,'$.startedAt'), completed_at,
+                    json_extract(payload_json,'$.modelSelection.model'),
+                    json_extract(payload_json,'$.delegatedTaskId') IS NOT NULL
+             FROM orchestration_v2_projection_runs
+             WHERE thread_id = ?1 AND requested_at >= ?2 AND requested_at < ?3 ORDER BY ordinal",
+        )?;
+        d.runs = st
+            .query_map(params![thread, from, to], |r| {
+                Ok(ThreadRun {
+                    n: r.get(0)?,
+                    status: r.get(1)?,
+                    requested: ts(r.get(2)?).unwrap_or(0),
+                    started: ts(r.get(3)?),
+                    completed: ts(r.get(4)?),
+                    model: r.get(5)?,
+                    delegated: r.get::<_, i64>(6)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut st = self.conn.prepare_cached(
+            "SELECT type, CASE WHEN type = 'dynamic_tool' THEN json_extract(payload_json,'$.toolName') END, count(*)
+             FROM orchestration_v2_projection_turn_items
+             WHERE thread_id = ?1 AND updated_at >= ?2 AND updated_at < ?3 GROUP BY 1, 2",
+        )?;
+        let rows: Vec<(String, Option<String>, i64)> =
+            st.query_map(params![thread, from, to], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let mut tools: HashMap<String, i64> = HashMap::new();
+        let mut items: HashMap<String, i64> = HashMap::new();
+        for (ty, tool, n) in rows {
+            *items.entry(ty.clone()).or_default() += n;
+            if matches!(ty.as_str(), "command_execution" | "dynamic_tool" | "file_change" | "web_search" | "subagent") {
+                *tools.entry(step_of(&ty, tool.as_deref(), "running").0).or_default() += n;
+            }
+        }
+        let sorted = |m: HashMap<String, i64>| {
+            let mut v: Vec<(String, i64)> = m.into_iter().collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            v
+        };
+        d.tools = sorted(tools);
+        d.items = sorted(items);
+        let mut st = self.conn.prepare_cached(
+            "SELECT subagent_id, thread_id, run_id, child_thread_id, origin, status,
+                    json_extract(payload_json,'$.model'), json_extract(payload_json,'$.title'),
+                    started_at, completed_at, updated_at
+             FROM orchestration_v2_projection_subagents
+             WHERE thread_id = ?1 AND ((coalesce(started_at, updated_at) >= ?2 AND coalesce(started_at, updated_at) < ?3)
+                   OR status NOT IN ('completed','failed','interrupted','cancelled'))
+             ORDER BY coalesce(started_at, updated_at)",
+        )?;
+        d.subs = st
+            .query_map(params![thread, from, to], |r| {
+                Ok(Subagent {
+                    id: r.get(0)?,
+                    thread: r.get(1)?,
+                    run: r.get(2)?,
+                    child: r.get(3)?,
+                    origin: r.get(4)?,
+                    status: r.get(5)?,
+                    model: r.get(6)?,
+                    title: r.get(7)?,
+                    started: ts(r.get(8)?),
+                    completed: ts(r.get(9)?),
+                    updated: ts(r.get(10)?).unwrap_or(0),
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(d)
+    }
+
     /// Latest context fill and prompt-cache expiry for a thread.
     pub fn ctx(&self, thread: &str) -> rusqlite::Result<Option<Ctx>> {
         self.conn
@@ -810,6 +911,50 @@ mod tests {
         assert_eq!(step_of("dynamic_tool", Some("mcp__t3-code__t3_thread_send"), "running").0, "t3 thread_send");
         assert_eq!(step_of("dynamic_tool", Some("Read"), "completed").0, "thinking");
         assert_eq!(short_tool("mcp__plugin_claude-mem_mcp-search__work_state_write"), "claude-mem work_state_write");
+    }
+
+    #[test]
+    fn thread_detail_counts_names_only() {
+        let p = fixture("detail", false);
+        {
+            let c = Connection::open(&p).unwrap();
+            c.execute_batch(
+                r#"INSERT INTO orchestration_v2_projection_turn_items VALUES
+                   ('i4','kid','r2',3,'dynamic_tool','completed','2026-11-17T09:01:00.000Z','{"toolName":"Read","input":{"path":"/secret"}}'),
+                   ('i5','kid','r2',4,'dynamic_tool','completed','2026-11-17T09:02:00.000Z','{"toolName":"Read","input":{"path":"/other"}}'),
+                   ('i6','kid','r2',5,'dynamic_tool','completed','2026-11-17T09:03:00.000Z','{"toolName":"mcp__t3-code__t3_thread_send"}'),
+                   ('i7','kid','r2',6,'assistant_message','completed','2026-11-17T09:04:00.000Z','{"text":"hello secret"}'),
+                   ('old','kid','r1',7,'file_change','completed','2026-11-16T09:04:00.000Z','{}'),
+                   ('oth','hq','r9',1,'command_execution','completed','2026-11-17T09:04:00.000Z','{}');
+                 INSERT INTO orchestration_v2_projection_runs VALUES
+                   ('r1','kid',1,'completed','2026-11-17T08:30:00.000Z','2026-11-17T08:40:00.000Z','{"startedAt":"2026-11-17T08:31:00.000Z","modelSelection":{"model":"claude-sonnet-5-5"},"delegatedTaskId":"d1"}'),
+                   ('r0','kid',0,'completed','2026-11-16T08:30:00.000Z','2026-11-16T08:40:00.000Z','{}');
+                 INSERT INTO orchestration_v2_projection_subagents VALUES
+                   ('sa1','kid','r2',NULL,'app_owned','completed','2026-11-17T08:50:00.000Z','2026-11-17T08:55:00.000Z','2026-11-17T08:55:00.000Z','{"model":"claude-haiku-5-5","title":"Scout"}'),
+                   ('sa0','kid','r0',NULL,'app_owned','completed','2026-11-16T08:50:00.000Z','2026-11-16T08:55:00.000Z','2026-11-16T08:55:00.000Z','{"model":"x"}');"#,
+            )
+            .unwrap();
+        }
+        let t = T3::open(&p).unwrap();
+        let from = parse_ts_ms("2026-11-17T00:00:00Z").unwrap();
+        let d = t.thread_detail("kid", from, from + 24 * 3_600_000).unwrap();
+        assert_eq!(d.runs.iter().map(|r| r.n).collect::<Vec<_>>(), vec![1, 3]);
+        assert!(d.runs[0].delegated && d.runs[0].model.as_deref() == Some("claude-sonnet-5-5"));
+        assert_eq!(d.runs[1].status, "running");
+        assert_eq!(d.tools[0], ("Read".to_string(), 2));
+        assert!(d.tools.contains(&("t3 thread_send".to_string(), 1)));
+        assert!(d.tools.contains(&("Bash".to_string(), 1)));
+        // Yesterday's file_change and another thread's items are not counted.
+        assert!(!d.tools.iter().any(|(n, _)| n == "Edit"));
+        let reasoning = d.items.iter().find(|(n, _)| n == "reasoning").unwrap().1;
+        assert_eq!(reasoning, 1);
+        assert_eq!(d.items.iter().find(|(n, _)| n == "assistant_message").unwrap().1, 1);
+        assert_eq!(d.subs.len(), 1);
+        assert_eq!(d.subs[0].title.as_deref(), Some("Scout"));
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(!json.contains("secret"), "{json}");
+        // An unknown thread is empty, not an error.
+        assert!(t.thread_detail("nope", from, from + 1000).unwrap().runs.is_empty());
     }
 
     #[test]

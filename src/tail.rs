@@ -58,7 +58,7 @@ pub struct TailCache {
     pub agg: Agg,
 }
 
-pub const CACHE_VERSION: u32 = 4;
+pub const CACHE_VERSION: u32 = 5;
 
 #[derive(Default, Clone, Debug, Serialize)]
 pub struct TailStats {

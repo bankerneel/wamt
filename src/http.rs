@@ -1,6 +1,7 @@
 //! A deliberately small HTTP/1.1 server on `std::net`.
 //!
-//! Routes: `/` (the page), `/api/state` (everything as JSON), `/events`
+//! Routes: `/` (the page), `/api/state` (everything as JSON), `/api/thread`
+//! (one thread's drill-down, built on demand), `/events`
 //! (Server-Sent Events), `/healthz`. GET and HEAD only. Requests whose Host
 //! header is not localhost are refused, which blocks DNS-rebinding pages
 //! from reading the dashboard.
@@ -13,6 +14,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::hub::{Hub, Seen};
+use crate::drill;
+use crate::payload::Shared;
+use crate::timeutil::now_ms;
+use std::sync::Mutex;
 
 const MAX_CONNECTIONS: usize = 24;
 const HEARTBEAT: Duration = Duration::from_secs(15);
@@ -34,6 +39,8 @@ pub struct Asset {
 
 pub struct Server {
     pub hub: Arc<Hub>,
+    pub shared: Arc<Mutex<Shared>>,
+    pub t3_db: PathBuf,
     pub ui: Ui,
     pub assets: &'static [Asset],
     pub port: u16,
@@ -81,6 +88,7 @@ fn respond_with(s: &mut TcpStream, status: &str, ctype: &str, body: &[u8], head:
 struct Req {
     method: String,
     path: String,
+    query: String,
     host: String,
 }
 
@@ -102,7 +110,8 @@ fn read_req(s: &mut TcpStream) -> Option<Req> {
     let mut first = lines.next()?.split(' ');
     let method = first.next()?.to_string();
     let target = first.next()?;
-    let path = target.split('?').next().unwrap_or("/").to_string();
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let (path, query) = (path.to_string(), query.to_string());
     let mut host = String::new();
     for l in lines {
         if let Some((k, v)) = l.split_once(':') {
@@ -111,7 +120,7 @@ fn read_req(s: &mut TcpStream) -> Option<Req> {
             }
         }
     }
-    Some(Req { method, path, host })
+    Some(Req { method, path, query, host })
 }
 
 impl Server {
@@ -165,6 +174,18 @@ impl Server {
             "/api/state" => {
                 let (snap, _) = self.hub.snapshot();
                 let _ = respond(&mut s, "200 OK", "application/json", snap.as_bytes(), head);
+            }
+            "/api/thread" => {
+                let Some(id) = drill::id_from_query(&req.query) else {
+                    let _ = respond(&mut s, "400 Bad Request", "text/plain", b"bad thread id", head);
+                    return;
+                };
+                let _ = match drill::build(&self.shared, &self.t3_db, &id, now_ms()) {
+                    Ok(body) => respond(&mut s, "200 OK", "application/json", body.as_bytes(), head),
+                    Err(drill::DrillErr::NotFound) => respond(&mut s, "404 Not Found", "text/plain", b"unknown thread", head),
+                    Err(drill::DrillErr::Unavailable) => respond(&mut s, "503 Service Unavailable", "text/plain", b"T3 data unavailable", head),
+                    Err(drill::DrillErr::Db) => respond(&mut s, "500 Internal Server Error", "text/plain", b"cannot read thread", head),
+                };
             }
             "/healthz" => {
                 let _ = respond(&mut s, "200 OK", "text/plain", b"ok", head);
@@ -262,6 +283,8 @@ mod tests {
         static TEST_ASSETS: &[Asset] = &[Asset { name: "fonts/a.woff2", ctype: "font/woff2", bytes: b"wOF2" }];
         let srv = Arc::new(Server {
             hub: hub.clone(),
+            shared: Arc::new(Mutex::new(Shared::new(0))),
+            t3_db: PathBuf::from("/nonexistent/statev2.sqlite"),
             ui: Ui::Embedded("<!doctype html><title>t</title>"),
             assets: TEST_ASSETS,
             port,
@@ -287,6 +310,12 @@ mod tests {
         assert!(state.starts_with("HTTP/1.1 200"));
         assert!(state.contains("{\"live\":{\"ok\":true}"));
         assert!(get(port, "/nope", &h).starts_with("HTTP/1.1 404"));
+        // Thread drill-down: bad ids are 400, a good id with no T3 data is 503.
+        for bad in ["/api/thread", "/api/thread?id=", "/api/thread?id=a%2Fb", "/api/thread?id=a%20b", "/api/thread?id=..%2f..%2fetc"] {
+            assert!(get(port, bad, &h).starts_with("HTTP/1.1 400"), "{bad}");
+        }
+        assert!(get(port, "/api/thread?id=mcp:abc", &h).starts_with("HTTP/1.1 503"));
+        assert!(get(port, "/api/thread?id=mcp:abc", "evil.example:80").starts_with("HTTP/1.1 403"));
         assert!(get(port, "/", "evil.example:80").starts_with("HTTP/1.1 403"));
         assert!(get(port, "/", &format!("localhost:{port}")).contains("<title>t</title>"));
         let font = get(port, "/assets/fonts/a.woff2", &h);

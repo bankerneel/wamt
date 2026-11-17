@@ -2,6 +2,7 @@
 //! and Claude Code usage. Read-only on its sources; binds to 127.0.0.1.
 
 mod agg;
+mod drill;
 mod feed;
 mod http;
 mod hub;
@@ -590,6 +591,6 @@ fn main() {
         Some(p) => http::Ui::Disk(p),
         None => http::Ui::Embedded(UI),
     };
-    let server = Arc::new(http::Server { hub, ui, assets: ASSETS, port, extra_hosts: cfg.extra_hosts });
+    let server = Arc::new(http::Server { hub, shared: shared.clone(), t3_db: cfg.t3_db.clone(), ui, assets: ASSETS, port, extra_hosts: cfg.extra_hosts });
     server.run(listener);
 }

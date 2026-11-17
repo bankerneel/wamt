@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::timeutil::{day_of, day_start_ms, hour_of, MS_PER_HOUR, MS_PER_MIN};
+use crate::timeutil::{day_of, day_start_ms, hour_of, now_ms, MS_PER_HOUR, MS_PER_MIN};
 use crate::transcript::{family, weight, Tokens};
 
 pub const WINDOW_MS: i64 = 5 * MS_PER_HOUR;
@@ -45,6 +45,20 @@ pub struct SessionDay {
     /// Cold restarts: big cache rebuilds after the cache had expired.
     #[serde(default)]
     pub cold: ColdUse,
+    /// Today only: weight (per model family) and output tokens per 10-minute
+    /// slot of the local day. Sparse, and dropped when the day rolls.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub buckets: BTreeMap<u16, Bucket>,
+}
+
+/// Length of one timeline bucket.
+pub const BUCKET_MS: i64 = 10 * MS_PER_MIN;
+
+/// One 10-minute timeline bucket of a session: numbers only.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Bucket {
+    pub w: [f64; 4],
+    pub out: u64,
 }
 
 /// Spoiled leftovers: requests that rebuilt over 50K tokens of cache after
@@ -233,6 +247,13 @@ impl Agg {
         if u.sub {
             s.sub.add(u.tokens, w);
         }
+        // Timeline buckets are kept for the current local day only.
+        if day == day_of(now_ms(), off) {
+            let slot = ((u.ts_ms - day_start_ms(day, off)) / BUCKET_MS).clamp(0, 143) as u16;
+            let b = s.buckets.entry(slot).or_default();
+            b.w[fam] += w;
+            b.out += u.tokens.output;
+        }
         if is_cold(u.tokens, u.ts_ms, u.prev_ms) {
             let writes = Tokens { cache_w5m: u.tokens.cache_w5m, cache_w1h: u.tokens.cache_w1h, ..Default::default() };
             s.cold.n += 1;
@@ -281,6 +302,18 @@ impl Agg {
     /// older than 26 hours.
     pub fn prune(&mut self, min_day: i32, now_ms: i64, off: i32) {
         let before = (self.days.len(), self.mins.len(), self.seen.len(), self.hits.len());
+        // Day roll: yesterday's timeline buckets go (only today's are kept).
+        let today = day_of(now_ms, off);
+        for (d, a) in self.days.iter_mut() {
+            if *d < today {
+                for s in a.sessions.values_mut() {
+                    if !s.buckets.is_empty() {
+                        s.buckets = BTreeMap::new();
+                        self.dirty = true;
+                    }
+                }
+            }
+        }
         self.days.retain(|d, _| *d >= min_day);
         self.seen.retain(|_, d| *d >= min_day);
         let min_minute = (now_ms - MINUTES_KEPT_MS).div_euclid(MS_PER_MIN);
@@ -561,6 +594,51 @@ mod tests {
         let c = a.days.values().next().unwrap().sessions["s1"].cold;
         assert_eq!((c.n, c.tok), (1, 80_000));
         assert!((c.w - 80_000.0 * 4.0 * 1.25).abs() < 1e-6, "{}", c.w);
+    }
+
+    fn at(a: &mut Agg, ts_ms: i64, model: &str, out: u64, id: &str) {
+        let t = Tokens { output: out, ..Default::default() };
+        a.add_usage(
+            UsageIn { session: "s1", sub: false, observer: false, ts_ms, model, tokens: &t, fast: false, msg_id: Some(id), prev_ms: 0 },
+            OFF,
+        );
+    }
+
+    #[test]
+    fn ten_minute_buckets_for_today_only() {
+        let mut a = Agg::default();
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        let start = day_start_ms(today, OFF);
+        // 03:05 and 03:09 share a slot; 03:10 starts the next one.
+        at(&mut a, start + 3 * MS_PER_HOUR + 5 * MS_PER_MIN, "claude-opus-5-5", 100, "a");
+        at(&mut a, start + 3 * MS_PER_HOUR + 9 * MS_PER_MIN, "claude-haiku-5-5", 10, "b");
+        at(&mut a, start + 3 * MS_PER_HOUR + 10 * MS_PER_MIN, "claude-opus-5-5", 7, "c");
+        // Yesterday's request leaves no buckets.
+        at(&mut a, start - MS_PER_HOUR, "claude-opus-5-5", 5, "d");
+        let b = &a.days[&today].sessions["s1"].buckets;
+        assert_eq!(b.keys().copied().collect::<Vec<_>>(), vec![18, 19]);
+        assert_eq!(b[&18].out, 110);
+        assert!(b[&18].w[0] > 0.0 && b[&18].w[2] > 0.0 && b[&18].w[1] == 0.0);
+        assert_eq!(b[&19].out, 7);
+        assert!(a.days[&(today - 1)].sessions["s1"].buckets.is_empty());
+        // Totals still add up with and without buckets.
+        let total: f64 = b.values().map(|x| x.w.iter().sum::<f64>()).sum();
+        assert!((total - a.days[&today].sessions["s1"].models.values().map(|u| u.w).sum::<f64>()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn buckets_dropped_at_day_roll() {
+        let mut a = Agg::default();
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        at(&mut a, day_start_ms(today, OFF) + MS_PER_HOUR, "claude-opus-5-5", 1, "a");
+        assert!(!a.days[&today].sessions["s1"].buckets.is_empty());
+        // A day later the same data is yesterday's: buckets go, totals stay.
+        a.prune(today - 1, now + 24 * MS_PER_HOUR, OFF);
+        let s = &a.days[&today].sessions["s1"];
+        assert!(s.buckets.is_empty());
+        assert_eq!(s.models["claude-opus-5-5"].t.output, 1);
     }
 
     #[test]

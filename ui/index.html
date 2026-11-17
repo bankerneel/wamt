@@ -298,6 +298,44 @@ footer b { font-weight: 800; }
 #tip.show { opacity: 1; }
 #tip b { font-weight: 800; }
 
+/* Thread drill-down: a side sheet, a full-screen sheet on phones. */
+.row[data-thread], .list li[data-thread] { cursor: pointer; }
+.list li[data-thread]:hover .lbl .nm em { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 2px; }
+#drill { position: fixed; inset: 0; z-index: 8; display: flex; justify-content: flex-end; background: rgba(34, 28, 44, .42); }
+#drill[hidden] { display: none; }
+#drill .sheet { width: min(620px, 100vw); height: 100%; overflow-y: auto; background: var(--panel); color: var(--ink); border-left: 2px solid var(--border); box-shadow: -8px 0 0 var(--shadow); padding: 26px 20px 28px; position: relative; overscroll-behavior: contain; }
+#drill .x { position: absolute; top: 12px; right: 14px; }
+#drill .ticket { margin: 0 0 12px -4px; }
+#drill .dtitle { font-size: 20px; font-weight: 850; letter-spacing: -.02em; line-height: 1.2; margin: 4px 36px 6px 0; overflow-wrap: anywhere; }
+#drill .dmeta { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; color: var(--ink-soft); }
+#drill .aside { margin: 10px 0 0; font-size: 22px; transform: rotate(-1deg); transform-origin: left; display: block; }
+#drill h4 { font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 22px 0 8px; padding-bottom: 5px; border-bottom: 2px solid var(--border); }
+#drill .sub2 { font-weight: 600; letter-spacing: 0; text-transform: none; margin-left: 6px; }
+#drill table { font-size: 13px; }
+#drill td.l, #drill th.l { text-align: left; }
+#drill .st { font-size: 11px; font-weight: 800; }
+#drill .st.failed, #drill .st.interrupted { color: var(--need); } #drill .st.completed { color: var(--good); } #drill .st.running, #drill .st.waiting { color: var(--accent-ink); }
+#drill .tl { width: 100%; height: auto; display: block; overflow: visible; }
+#drill .tl .m0 { fill: var(--m0); } #drill .tl .m1 { fill: var(--m1); } #drill .tl .m2 { fill: var(--m2); } #drill .tl .m3 { fill: var(--m3); }
+#drill .tl .axis { stroke: var(--border); stroke-width: 2; }
+#drill .tl text { fill: var(--muted); font-size: 10px; font-family: inherit; }
+#drill .tl .hit { fill: transparent; } #drill .tl .hit:hover { fill: var(--rule); }
+#drill .bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+#drill .bars li { display: grid; grid-template-columns: minmax(0, 1fr) 54px; gap: 8px; align-items: center; font-size: 13px; }
+#drill .bars .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 650; }
+#drill .bars .bar { height: 7px; border: 1.5px solid var(--border); border-radius: 2px; background: var(--meter-track); margin-top: 3px; overflow: hidden; }
+#drill .bars .bar i { display: block; height: 100%; background: var(--c4); }
+#drill .bars .v { text-align: right; font-size: 12px; color: var(--ink-soft); font-weight: 650; }
+#drill .types { display: flex; flex-wrap: wrap; gap: 6px; }
+#drill .types span { font-size: 12px; border: 1.5px solid var(--border); border-radius: 2px; padding: 2px 7px 1px; background: var(--panel-2); }
+#drill .types b { font-weight: 850; margin-left: 4px; }
+#drill .none { color: var(--muted); font-size: 13px; margin: 0; }
+@media (max-width: 700px) {
+  #drill .sheet { width: 100vw; border-left: 0; box-shadow: none; padding: 24px 14px 28px; }
+}
+@media (prefers-reduced-motion: no-preference) { #drill:not([hidden]) .sheet { animation: slidein .16s ease-out; } }
+@keyframes slidein { from { transform: translateX(24px); opacity: .4; } to { transform: none; opacity: 1; } }
+
 @media (max-width: 1180px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
   .side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -384,6 +422,12 @@ footer b { font-weight: 800; }
   </section>
 
   <footer id="foot"></footer>
+</div>
+<div id="drill" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="drillTitle" tabindex="-1">
+    <button class="iconbtn x" id="drillClose" type="button" aria-label="Close thread details">Close</button>
+    <div id="drillBody"></div>
+  </div>
 </div>
 <div id="tip" role="tooltip"></div>
 
@@ -678,7 +722,7 @@ function threadRow(n, depth, trail, last, L) {
     : '<div class="tok muted">none</div>';
   const lastTs = Math.max(t.updated, t.last_req || 0, run && run.step ? run.step.since : 0);
   return {
-    key: t.id, depth, live: !!run,
+    key: t.id, thread: t.id, depth, live: !!run,
     html: `<span class="lamp ${lamp}" aria-hidden="true"></span>
       <div class="who">${cordsHtml(depth, trail, last, fam)}<div class="names"><div class="t" title="${esc(t.title)}">${esc(t.title)}</div><div class="sub">${esc(subBits.join(", "))}</div></div></div>
       <div class="model">${chip(model)}${eff ? `<span class="eff">${esc(eff)}</span>` : ""}${t.fast ? '<span class="eff">fast</span>' : ""}</div>
@@ -725,6 +769,7 @@ function keyed(container, items) {
       if (S.boardReady) { el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1300); }
     }
     el.classList.toggle("depth0", it.depth === 0);
+    if (it.thread) { el.dataset.thread = it.thread; el.tabIndex = 0; } else { delete el.dataset.thread; el.removeAttribute("tabindex"); }
     if (el._html !== it.html) { el.innerHTML = it.html; el._html = it.html; }
     const want = prev ? prev.nextSibling : container.firstChild;
     if (want !== el) container.insertBefore(el, want);
@@ -1109,7 +1154,8 @@ function renderDays(force) {
       for (const [m, u] of Object.entries(s.models)) fams[family(m)] += u.w;
       const top = fams.indexOf(Math.max(...fams));
       const suspect = rank === 0 && d.sources.length > 1 ? '<span class="prime">prime suspect</span>' : "";
-      return `<li data-tip="${esc(tipTxt)}"><div class="lbl"><div class="nm"><em>${esc(s.label)}</em>${suspect}</div><small>${esc(ctx)}</small><div class="bar"><i style="width:${(s.total.w / maxS) * 100}%;background:var(--m${top})"></i></div></div><div class="v num">${Math.round((s.total.w / fw) * 100)}%<br>${compact(s.total.t[1])} out</div></li>`;
+      const open = s.thread ? ` data-thread="${esc(s.thread)}" tabindex="0"` : "";
+      return `<li data-tip="${esc(tipTxt)}"${open}><div class="lbl"><div class="nm"><em>${esc(s.label)}</em>${suspect}</div><small>${esc(ctx)}</small><div class="bar"><i style="width:${(s.total.w / maxS) * 100}%;background:var(--m${top})"></i></div></div><div class="v num">${Math.round((s.total.w / fw) * 100)}%<br>${compact(s.total.t[1])} out</div></li>`;
     }).join("") + "</ol>";
     if (d.sources.length > 7 || d.sources_more) col += `<p class="fine">${d.sources.length - 7 + d.sources_more > 0 ? d.sources.length - 7 + d.sources_more + " more on the bill" : ""}</p>`;
     return col + "</div>";
@@ -1286,6 +1332,141 @@ function alerts(L) {
   A.primed = true;
 }
 
+// ------------------------------------------------------------------ drill-down
+// One thread's day: runs, tool counts, subagents and a 10-minute token
+// timeline, fetched on demand from /api/thread (counts and names only).
+const D = { id: null, opener: null, timer: 0, seq: 0 };
+const drillEl = $("drill"), drillBody = $("drillBody");
+
+function openDrill(id, opener) {
+  if (!id) return;
+  const again = D.id === id && !drillEl.hidden;
+  D.id = id; D.opener = opener || null;
+  drillEl.hidden = false;
+  document.body.style.overflow = "hidden";
+  if (!again) drillBody.innerHTML = '<span class="ticket t-sky">Thread</span><p class="none">Loading the day for this thread.</p>';
+  loadDrill(id, !again);
+  clearInterval(D.timer);
+  D.timer = setInterval(() => loadDrill(id, false), 20000);
+  if (!again) $("drillClose").focus();
+}
+function closeDrill() {
+  if (drillEl.hidden) return;
+  drillEl.hidden = true; D.id = null; D.seq++;
+  clearInterval(D.timer);
+  document.body.style.overflow = "";
+  const o = D.opener; D.opener = null;
+  if (o && o.isConnected) o.focus();
+}
+function loadDrill(id, first) {
+  const seq = ++D.seq;
+  fetch("/api/thread?id=" + encodeURIComponent(id)).then((r) => {
+    if (r.status === 404) throw new Error("T3 no longer lists this thread.");
+    if (!r.ok) throw new Error("The thread details could not be read (" + r.status + ").");
+    return r.json();
+  }).then((d) => { if (seq === D.seq && D.id === id) drillBody.innerHTML = drillHtml(d); })
+    .catch((e) => { if (seq === D.seq && (first || !drillBody.querySelector("#drillTitle"))) drillBody.innerHTML = `<span class="ticket t-sky">Thread</span><p class="none">${esc(e.message)}</p>`; });
+}
+
+function drillTimeline(d) {
+  const tl = d.timeline, B = tl.bucket_ms, bs = tl.buckets;
+  if (!bs.length) return '<p class="none">No token usage recorded for this thread today.</p>';
+  const first = Math.floor((bs[0].t - d.day_start) / B), nowSlot = Math.floor((d.now - d.day_start) / B);
+  const last = Math.max(nowSlot, Math.floor((bs[bs.length - 1].t - d.day_start) / B));
+  const from = Math.max(0, Math.min(first, last - 5)), n = last - from + 1;
+  const byT = new Map(bs.map((b) => [b.t, b]));
+  const sum = (b) => b.w[0] + b.w[1] + b.w[2] + b.w[3];
+  const max = Math.max(...bs.map(sum)) || 1, all = bs.reduce((a, b) => a + sum(b), 0) || 1;
+  const W = 560, H = 120, padL = 4, padB = 18, plotH = H - padB, colW = (W - padL) / n, gap = Math.min(2, colW / 4);
+  let svg = `<svg class="tl" viewBox="0 0 ${W} ${H}" role="img" aria-label="Token usage for this thread today, per 10 minutes">`;
+  const used = [false, false, false, false];
+  for (let i = 0; i < n; i++) {
+    const t = d.day_start + (from + i) * B, b = byT.get(t), x = padL + i * colW;
+    const tip = b
+      ? `<b>${hhmm(t)} to ${hhmm(t + B)}</b><br>${((sum(b) / all) * 100).toFixed(1)}% of this thread today<br>${full(b.out)} output tokens<br>` + b.w.map((v, k) => (v > 0 ? `${FAM[k]}: ${((v / sum(b)) * 100).toFixed(0)}%` : "")).filter(Boolean).join(", ")
+      : `<b>${hhmm(t)} to ${hhmm(t + B)}</b><br>no usage`;
+    if (b) {
+      let y = plotH;
+      for (let k = 0; k < 4; k++) {
+        if (b.w[k] <= 0) continue;
+        const h = Math.max(1, (b.w[k] / max) * (plotH - 4));
+        y -= h; used[k] = true;
+        svg += `<rect class="m${k}" x="${(x + gap / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, colW - gap).toFixed(1)}" height="${h.toFixed(1)}"/>`;
+      }
+    }
+    svg += `<rect class="hit" x="${x.toFixed(1)}" y="0" width="${colW.toFixed(1)}" height="${plotH}" data-tip="${esc(tip)}"/>`;
+  }
+  svg += `<line class="axis" x1="0" x2="${W}" y1="${plotH}" y2="${plotH}"/>`;
+  const ticks = n <= 6 ? [0, n - 1] : [0, Math.floor((n - 1) / 2), n - 1];
+  ticks.forEach((i, j) => { svg += `<text x="${(padL + i * colW + (j === ticks.length - 1 && ticks.length > 1 ? colW : 0)).toFixed(1)}" y="${H - 4}" text-anchor="${j === 0 ? "start" : j === ticks.length - 1 ? "end" : "middle"}">${hhmm(d.day_start + (from + i) * B)}</text>`; });
+  svg += "</svg>";
+  const legend = '<div class="legend">' + used.map((u, k) => (u ? `<span>${sw(k)}${FAM[k]}</span>` : "")).join("") + `<span class="muted">bar height is weighted usage, ${tl.sessions} session${tl.sessions === 1 ? "" : "s"}</span></div>`;
+  return svg + legend;
+}
+
+function drillHtml(d) {
+  const fam = family(d.model);
+  let h = `<span class="ticket t-sky">Thread</span><div class="dtitle" id="drillTitle">${esc(d.title)}</div>
+    <div class="dmeta">${d.model ? chip(d.model) : ""}${d.project ? `<span>${esc(d.project)}</span>` : ""}<span class="muted">today, until ${hhmm(d.now)}</span></div>
+    <span class="hand aside">what it ate today</span>`;
+  h += `<h4>Token timeline <span class="sub2">per 10 minutes</span></h4>` + drillTimeline(d);
+
+  h += `<h4>Runs today <span class="sub2">${d.runs.length}</span></h4>`;
+  if (!d.runs.length) h += '<p class="none">No runs today.</p>';
+  else {
+    const shown = d.runs.slice(-30);
+    h += `<div class="tablewrap"><table><thead><tr><th class="l">Run</th><th class="l">Started</th><th>Length</th><th class="l">Status</th><th class="l">Model</th></tr></thead><tbody>` +
+      shown.map((r) => `<tr><td class="l num">${r.n}${r.delegated ? ' <span class="muted">delegated</span>' : ""}</td><td class="l num">${hhmm(r.at)}</td><td class="num">${r.ms != null ? dur(r.ms) : "-"}</td><td class="l"><span class="st ${esc(r.status)}">${esc(r.status)}</span></td><td class="l">${r.model ? chip(r.model) : ""}</td></tr>`).join("") +
+      "</tbody></table></div>" + (d.runs.length > shown.length ? `<p class="fine">and ${d.runs.length - shown.length} earlier runs</p>` : "");
+  }
+
+  h += `<h4>Tool calls today <span class="sub2">${full(d.tools.reduce((a, t) => a + t.n, 0))}</span></h4>`;
+  if (!d.tools.length) h += '<p class="none">No tool calls today.</p>';
+  else {
+    const mx = d.tools[0].n || 1;
+    h += '<ul class="bars">' + d.tools.slice(0, 12).map((t) => `<li><div><div class="nm" title="${esc(t.name)}">${esc(t.name)}</div><div class="bar"><i style="width:${((t.n / mx) * 100).toFixed(1)}%"></i></div></div><div class="v num">${full(t.n)}</div></li>`).join("") + "</ul>" +
+      (d.tools.length > 12 ? `<p class="fine">and ${d.tools.length - 12} more tools</p>` : "");
+  }
+
+  h += `<h4>Turn items today</h4>`;
+  h += d.items.length ? '<div class="types">' + d.items.map((i) => `<span>${esc(i.type.replace(/_/g, " "))}<b class="num">${full(i.n)}</b></span>`).join("") + "</div>" : '<p class="none">None today.</p>';
+
+  h += `<h4>Subagents <span class="sub2">${d.subagents.length}</span></h4>`;
+  if (!d.subagents.length) h += '<p class="none">No subagents today.</p>';
+  else h += `<div class="tablewrap"><table><thead><tr><th class="l">Subagent</th><th class="l">Model</th><th>Started</th><th>Length</th><th class="l">Status</th></tr></thead><tbody>` +
+    d.subagents.slice(0, 30).map((s) => `<tr><td class="l" title="${esc(s.title || "")}">${esc(s.title || (s.origin === "provider_native" ? "built-in subagent" : "subagent"))}</td><td class="l">${s.model ? chip(s.model) : ""}</td><td class="num">${hhmm(s.at)}</td><td class="num">${s.ms != null ? dur(s.ms) : "-"}</td><td class="l"><span class="st ${esc(s.status)}">${esc(s.status)}</span></td></tr>`).join("") + "</tbody></table></div>" +
+    (d.subagents.length > 30 ? `<p class="fine">and ${d.subagents.length - 30} more</p>` : "");
+  return h;
+}
+
+document.addEventListener("click", (e) => {
+  if (e.target === drillEl) { closeDrill(); return; }
+  const el = e.target.closest && e.target.closest("[data-thread]");
+  if (el && !drillEl.contains(el)) {
+    // Selecting text in a row is not a click on it.
+    const sel = window.getSelection && String(window.getSelection());
+    if (sel) return;
+    openDrill(el.dataset.thread, el);
+  }
+});
+$("drillClose").addEventListener("click", closeDrill);
+document.addEventListener("keydown", (e) => {
+  if (drillEl.hidden) {
+    const el = e.target.closest && e.target.closest("[data-thread]");
+    if (el && e.target === el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openDrill(el.dataset.thread, el); }
+    return;
+  }
+  if (e.key === "Escape") { e.preventDefault(); closeDrill(); return; }
+  if (e.key === "Tab") {
+    // Keep focus inside the sheet while it is open.
+    const f = [...drillEl.querySelectorAll("button, [href], [tabindex]:not([tabindex='-1'])")].filter((x) => !x.disabled);
+    if (!f.length) return;
+    const a = f[0], z = f[f.length - 1];
+    if (e.shiftKey && (document.activeElement === a || document.activeElement === drillEl.firstElementChild)) { e.preventDefault(); z.focus(); }
+    else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
+  }
+});
+
 // ------------------------------------------------------------------ stream
 function onLive(L) {
   S.live = L; S.skew = L.now - Date.now(); S.lastMsg = Date.now();
@@ -1301,7 +1482,7 @@ function onFeed(items, fresh) {
 function connect() {
   const params = new URLSearchParams(location.search);
   if (params.has("snapshot")) {
-    fetch("/api/state").then((r) => r.json()).then((s) => { S.connected = true; onLive(s.live); onDays(JSON.stringify(s.days)); onFeed(s.feed, false); });
+    fetch("/api/state").then((r) => r.json()).then((s) => { S.connected = true; onLive(s.live); onDays(JSON.stringify(s.days)); onFeed(s.feed, false); if (params.get("thread")) openDrill(params.get("thread")); });
     return;
   }
   const es = new EventSource("/events");
