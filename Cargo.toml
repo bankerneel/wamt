@@ -1,8 +1,8 @@
 [package]
-name = "switchboard"
+name = "wamt"
 version = "0.1.0"
 edition = "2021"
-description = "Local live dashboard for T3 Code threads and Claude Code usage"
+description = "Who Ate My Tokens: a local live dashboard of T3 Code threads and Claude Code usage"
 publish = false
 
 [dependencies]

@@ -20,22 +20,55 @@ static OPEN: AtomicUsize = AtomicUsize::new(0);
 
 pub enum Ui {
     Embedded(&'static str),
+    /// The page read from disk on every request, with `assets/` beside it
+    /// (development: edits show up without a rebuild).
     Disk(PathBuf),
+}
+
+/// A file compiled into the binary and served under `/assets/<name>`.
+pub struct Asset {
+    pub name: &'static str,
+    pub ctype: &'static str,
+    pub bytes: &'static [u8],
 }
 
 pub struct Server {
     pub hub: Arc<Hub>,
     pub ui: Ui,
+    pub assets: &'static [Asset],
     pub port: u16,
     /// Extra Host values to accept (the test container publishes a port).
     pub extra_hosts: Vec<String>,
 }
 
-const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+fn ctype_of(name: &str) -> &'static str {
+    match name.rsplit('.').next().unwrap_or("") {
+        "woff2" => "font/woff2",
+        "png" => "image/png",
+        "svg" => "image/svg+xml",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Asset names are plain relative paths: no "..", no leading slash, no
+/// characters outside a small safe set.
+fn safe_asset_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('/')
+        && !name.split('/').any(|p| p.is_empty() || p == "." || p == "..")
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/'))
+}
 
 fn respond(s: &mut TcpStream, status: &str, ctype: &str, body: &[u8], head: bool) -> std::io::Result<()> {
+    respond_with(s, status, ctype, body, head, "no-store")
+}
+
+fn respond_with(s: &mut TcpStream, status: &str, ctype: &str, body: &[u8], head: bool, cache: &str) -> std::io::Result<()> {
     let hdr = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: {CSP}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: {cache}\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: {CSP}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     s.write_all(hdr.as_bytes())?;
@@ -136,6 +169,24 @@ impl Server {
             "/healthz" => {
                 let _ = respond(&mut s, "200 OK", "text/plain", b"ok", head);
             }
+            p if p.starts_with("/assets/") => {
+                let name = &p["/assets/".len()..];
+                let found: Option<(Vec<u8>, &str)> = if !safe_asset_name(name) {
+                    None
+                } else {
+                    match &self.ui {
+                        Ui::Disk(page) => {
+                            let dir = page.parent().map(|d| d.join("assets")).unwrap_or_else(|| PathBuf::from("assets"));
+                            std::fs::read(dir.join(name)).ok().map(|b| (b, ctype_of(name)))
+                        }
+                        Ui::Embedded(_) => self.assets.iter().find(|a| a.name == name).map(|a| (a.bytes.to_vec(), a.ctype)),
+                    }
+                };
+                let _ = match found {
+                    Some((body, ctype)) => respond_with(&mut s, "200 OK", ctype, &body, head, "public, max-age=86400"),
+                    None => respond(&mut s, "404 Not Found", "text/plain", b"not found", head),
+                };
+            }
             "/events" if !head => self.sse(s),
             _ => {
                 let _ = respond(&mut s, "404 Not Found", "text/plain", b"not found", head);
@@ -208,7 +259,14 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         let hub = Hub::new();
         hub.set_live("{\"ok\":true}".into());
-        let srv = Arc::new(Server { hub: hub.clone(), ui: Ui::Embedded("<!doctype html><title>t</title>"), port, extra_hosts: vec![] });
+        static TEST_ASSETS: &[Asset] = &[Asset { name: "fonts/a.woff2", ctype: "font/woff2", bytes: b"wOF2" }];
+        let srv = Arc::new(Server {
+            hub: hub.clone(),
+            ui: Ui::Embedded("<!doctype html><title>t</title>"),
+            assets: TEST_ASSETS,
+            port,
+            extra_hosts: vec![],
+        });
         std::thread::spawn(move || srv.run(l));
         (port, hub)
     }
@@ -231,6 +289,11 @@ mod tests {
         assert!(get(port, "/nope", &h).starts_with("HTTP/1.1 404"));
         assert!(get(port, "/", "evil.example:80").starts_with("HTTP/1.1 403"));
         assert!(get(port, "/", &format!("localhost:{port}")).contains("<title>t</title>"));
+        let font = get(port, "/assets/fonts/a.woff2", &h);
+        assert!(font.starts_with("HTTP/1.1 200") && font.contains("font/woff2") && font.ends_with("wOF2"));
+        assert!(get(port, "/assets/../Cargo.toml", &h).starts_with("HTTP/1.1 404"));
+        assert!(get(port, "/assets/missing.png", &h).starts_with("HTTP/1.1 404"));
+        assert!(!safe_asset_name("../x") && !safe_asset_name("/etc/passwd") && !safe_asset_name("a//b") && safe_asset_name("fonts/caveat.woff2"));
     }
 
     #[test]

@@ -183,17 +183,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
 
 [[package]]
-name = "switchboard"
-version = "0.1.0"
-dependencies = [
- "libc",
- "memchr",
- "rusqlite",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "syn"
 version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -215,6 +204,17 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
+name = "wamt"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "memchr",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "zmij"

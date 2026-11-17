@@ -1,5 +1,5 @@
-//! Switchboard: a small, local, live dashboard for T3 Code threads and
-//! Claude Code usage. Read-only on its sources; binds to 127.0.0.1.
+//! Who Ate My Tokens: a small, local, live dashboard for T3 Code threads
+//! and Claude Code usage. Read-only on its sources; binds to 127.0.0.1.
 
 mod agg;
 mod feed;
@@ -29,6 +29,16 @@ use crate::timeutil::{day_of, day_start_ms, now_ms, MS_PER_MIN};
 
 const UI: &str = include_str!("../ui/index.html");
 
+/// Fonts and images compiled into the binary. They live in read-only
+/// pages, so they cost no heap memory.
+static ASSETS: &[http::Asset] = &[
+    http::Asset { name: "fonts/archivo.woff2", ctype: "font/woff2", bytes: include_bytes!("../ui/assets/fonts/archivo.woff2") },
+    http::Asset { name: "fonts/caveat.woff2", ctype: "font/woff2", bytes: include_bytes!("../ui/assets/fonts/caveat.woff2") },
+    http::Asset { name: "logo.png", ctype: "image/png", bytes: include_bytes!("../ui/assets/logo.png") },
+    http::Asset { name: "logo-dark.png", ctype: "image/png", bytes: include_bytes!("../ui/assets/logo-dark.png") },
+    http::Asset { name: "favicon.png", ctype: "image/png", bytes: include_bytes!("../ui/assets/favicon.png") },
+];
+
 struct Config {
     bind: String,
     t3_db: PathBuf,
@@ -46,12 +56,12 @@ fn env_or(key: &str, default: impl Into<String>) -> String {
 fn config() -> Config {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     Config {
-        bind: env_or("SWITCHBOARD_BIND", "127.0.0.1:7317"),
-        t3_db: env_or("SWITCHBOARD_T3_DB", format!("{home}/.t3/userdata/statev2.sqlite")).into(),
-        claude_root: env_or("SWITCHBOARD_CLAUDE_ROOT", format!("{home}/.claude/projects")).into(),
-        state_dir: env_or("SWITCHBOARD_STATE", ".state").into(),
-        ui: std::env::var("SWITCHBOARD_UI").ok().filter(|v| !v.is_empty()).map(PathBuf::from),
-        extra_hosts: env_or("SWITCHBOARD_ALLOW_HOSTS", "")
+        bind: env_or("WAMT_BIND", "127.0.0.1:7317"),
+        t3_db: env_or("WAMT_T3_DB", format!("{home}/.t3/userdata/statev2.sqlite")).into(),
+        claude_root: env_or("WAMT_CLAUDE_ROOT", format!("{home}/.claude/projects")).into(),
+        state_dir: env_or("WAMT_STATE", ".state").into(),
+        ui: std::env::var("WAMT_UI").ok().filter(|v| !v.is_empty()).map(PathBuf::from),
+        extra_hosts: env_or("WAMT_ALLOW_HOSTS", "")
             .split(',')
             .map(|s| s.trim().to_ascii_lowercase())
             .filter(|s| !s.is_empty())
@@ -557,7 +567,7 @@ fn main() {
     };
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(7317);
     log(format!(
-        "switchboard on http://{} (utc offset {} min, T3 {}, transcripts {}, state {})",
+        "who ate my tokens? on http://{} (utc offset {} min, T3 {}, transcripts {}, state {})",
         cfg.bind,
         cfg.off,
         cfg.t3_db.display(),
@@ -580,6 +590,6 @@ fn main() {
         Some(p) => http::Ui::Disk(p),
         None => http::Ui::Embedded(UI),
     };
-    let server = Arc::new(http::Server { hub, ui, port, extra_hosts: cfg.extra_hosts });
+    let server = Arc::new(http::Server { hub, ui, assets: ASSETS, port, extra_hosts: cfg.extra_hosts });
     server.run(listener);
 }

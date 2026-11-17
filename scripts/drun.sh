@@ -18,11 +18,11 @@ exec docker run -d --name sb-test --network sb-net --memory 256m --cpus 1 \
   -v sb-target:/target:ro \
   -v "$PWD/.state-docker":/state \
   -v "$PWD/ui":/ui:ro \
-  -e SWITCHBOARD_BIND=0.0.0.0:7317 \
-  -e SWITCHBOARD_T3_DB=/data/t3/statev2.sqlite \
-  -e SWITCHBOARD_CLAUDE_ROOT=/data/claude \
-  -e SWITCHBOARD_STATE=/state \
-  -e SWITCHBOARD_UTC_OFFSET_MIN=330 \
-  -e SWITCHBOARD_UI=/ui/index.html \
-  -e SWITCHBOARD_ALLOW_HOSTS=localhost:7318,127.0.0.1:7318,sb-test:7317 \
-  rust:1-slim-bookworm /target/release/switchboard
+  -e WAMT_BIND=0.0.0.0:7317 \
+  -e WAMT_T3_DB=/data/t3/statev2.sqlite \
+  -e WAMT_CLAUDE_ROOT=/data/claude \
+  -e WAMT_STATE=/state \
+  -e WAMT_UTC_OFFSET_MIN=330 \
+  -e WAMT_UI=/ui/index.html \
+  -e WAMT_ALLOW_HOSTS=localhost:7318,127.0.0.1:7318,sb-test:7317 \
+  rust:1-slim-bookworm /target/release/wamt

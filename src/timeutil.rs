@@ -146,10 +146,10 @@ pub fn iso_ms(ms: i64) -> String {
     )
 }
 
-/// The machine's current UTC offset in minutes. `SWITCHBOARD_UTC_OFFSET_MIN`
+/// The machine's current UTC offset in minutes. `WAMT_UTC_OFFSET_MIN`
 /// overrides it (used in the test container).
 pub fn local_offset_min() -> i32 {
-    if let Ok(v) = std::env::var("SWITCHBOARD_UTC_OFFSET_MIN") {
+    if let Ok(v) = std::env::var("WAMT_UTC_OFFSET_MIN") {
         if let Ok(n) = v.trim().parse::<i32>() {
             return n;
         }

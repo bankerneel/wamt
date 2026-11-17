@@ -3,198 +3,234 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Switchboard</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23191c20'/%3E%3Ccircle cx='11' cy='11' r='4' fill='%23ffcf6e'/%3E%3Ccircle cx='21' cy='11' r='4' fill='%233a4048'/%3E%3Ccircle cx='11' cy='21' r='4' fill='%233a4048'/%3E%3Ccircle cx='21' cy='21' r='4' fill='%23ffcf6e'/%3E%3C/svg%3E">
+<title>Who Ate My Tokens</title>
+<link rel="icon" type="image/png" href="/assets/favicon.png">
 <style>
+/* Who Ate My Tokens. Look and colours: the "dream"
+   gradient, cream panels, plum ink, 2px borders, hard offset shadows,
+   tickets, a highlighter, Archivo and Caveat. */
+@font-face { font-family: "Archivo"; src: url(/assets/fonts/archivo.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Caveat"; src: url(/assets/fonts/caveat.woff2) format("woff2"); font-weight: 400 700; font-display: swap; }
+
 :root {
   color-scheme: light;
-  --chassis: #c9cdd1;
-  --plate: #f3f4f5;
-  --plate-2: #e7e9eb;
-  --rule: #d5d8db;
-  --ink: #14181c;
-  --ink-2: #4b5158;
-  --muted: #737980;
-  --lamp-on: #f2a51a;
-  --lamp-glow: rgba(242, 165, 26, .45);
-  --lamp-off: #c3c8cd;
-  --lamp-ring: rgba(20, 24, 28, .18);
-  --need: #d03b3b;
-  --need-glow: rgba(208, 59, 59, .35);
-  --good: #006300;
-  --warn: #b97800;
-  --m0: #2a78d6; --m1: #eb6834; --m2: #1baf7a; --m3: #eda100;
-  --cord: #9aa1a8;
-  --meter-track: #dfe2e5;
-  --focus: #2a78d6;
-  --shadow-tip: 0 6px 20px rgba(20, 24, 28, .18);
+  --dream: radial-gradient(70% 55% at 18% 12%, #ffd9a0 0%, transparent 60%), radial-gradient(60% 50% at 82% 8%, #ffb3c7 0%, transparent 58%), radial-gradient(85% 70% at 50% 100%, #b9c6ff 0%, transparent 62%), linear-gradient(180deg, #fbe7d2 0%, #ecdcf5 52%, #d7dfff 100%);
+  --ground: #f1e2ec;
+  --panel: #fffaf2;
+  --panel-2: #f7ecdd;
+  --ink: #3a2f3d;
+  --ink-soft: #5f4f62;
+  --muted: #86768a;
+  --rule: rgba(58, 47, 61, .2);
+  --border: #3a2f3d;
+  --shadow: rgba(58, 47, 61, .22);
+  --accent-ink: #9a4a2c;
+  --marker: #f2dca8;
+  --lamp-on: #f0a83c;
+  --lamp-glow: rgba(240, 168, 60, .38);
+  --lamp-off: #eadfe6;
+  --need: #a3261d;
+  --need-glow: rgba(163, 38, 29, .28);
+  --on-need: #fffaf2;
+  --good: #3f7d3a;
+  /* Chart marks (validated: CVD and contrast on the cream panel). */
+  --m0: #3f7fc2; --m1: #d4645a; --m2: #8d5fc0; --m3: #c49012;
+  /* Chip and ticket fills: the site's own pastels, with ink text. */
+  --c0: #a9c2dc; --c1: #e0a08f; --c2: #c3aad0; --c3: #f2dca8; --c4: #a8bd9e;
+  --chip-ink: #3a2f3d;
+  --cord: rgba(58, 47, 61, .34);
+  --meter-track: #f1e6d6;
+  --w-top: #3f7fc2; --w-mid: #8d5fc0; --w-bot: #d4645a; --w-shadow: #3a2f3d;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --chassis: #101215; --plate: #191c20; --plate-2: #20242a; --rule: #2b3036;
-    --ink: #ebe9e4; --ink-2: #b4b2ab; --muted: #868479;
-    --lamp-on: #ffcf6e; --lamp-glow: rgba(255, 190, 80, .5); --lamp-off: #2c3137; --lamp-ring: rgba(255, 255, 255, .08);
-    --need: #ff5d52; --need-glow: rgba(255, 93, 82, .45); --good: #3fbf5f; --warn: #e7a33a;
-    --m0: #3987e5; --m1: #d95926; --m2: #199e70; --m3: #c98500;
-    --cord: #474e57; --meter-track: #2a2f35; --focus: #6da7ec;
-    --shadow-tip: 0 6px 24px rgba(0, 0, 0, .5);
+    --dream: radial-gradient(70% 55% at 18% 12%, #4a2f3f 0%, transparent 60%), radial-gradient(60% 50% at 82% 8%, #3b2a4d 0%, transparent 58%), radial-gradient(85% 70% at 50% 100%, #24304d 0%, transparent 62%), linear-gradient(180deg, #2a1f2b 0%, #241d33 52%, #1b1b2e 100%);
+    --ground: #221c2c; --panel: #342b3f; --panel-2: #3d3349; --ink: #f2e9dc; --ink-soft: #c9bcc4; --muted: #a596a7;
+    --rule: rgba(242, 233, 220, .16); --border: #f2e9dc; --shadow: rgba(0, 0, 0, .5); --accent-ink: #e59a74; --marker: rgba(192, 112, 72, .42);
+    --lamp-on: #ffcf6e; --lamp-glow: rgba(255, 207, 110, .3); --lamp-off: #4a3f56; --need: #f09a8f; --need-glow: rgba(240, 154, 143, .3); --on-need: #1a141f; --good: #8fc47a;
+    --m0: #4a87c8; --m1: #d0685a; --m2: #9a6fd0; --m3: #c08a1c;
+    --c0: #5a8a9c; --c1: #bd786b; --c2: #9a7a9f; --c3: #c9a24a; --c4: #7d9064; --chip-ink: #1a141f;
+    --cord: rgba(242, 233, 220, .3); --meter-track: #2a2234;
+    --w-top: #a9c2dc; --w-mid: #c3aad0; --w-bot: #e0a08f; --w-shadow: #000;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --chassis: #101215; --plate: #191c20; --plate-2: #20242a; --rule: #2b3036;
-  --ink: #ebe9e4; --ink-2: #b4b2ab; --muted: #868479;
-  --lamp-on: #ffcf6e; --lamp-glow: rgba(255, 190, 80, .5); --lamp-off: #2c3137; --lamp-ring: rgba(255, 255, 255, .08);
-  --need: #ff5d52; --need-glow: rgba(255, 93, 82, .45); --good: #3fbf5f; --warn: #e7a33a;
-  --m0: #3987e5; --m1: #d95926; --m2: #199e70; --m3: #c98500;
-  --cord: #474e57; --meter-track: #2a2f35; --focus: #6da7ec;
-  --shadow-tip: 0 6px 24px rgba(0, 0, 0, .5);
+  --dream: radial-gradient(70% 55% at 18% 12%, #4a2f3f 0%, transparent 60%), radial-gradient(60% 50% at 82% 8%, #3b2a4d 0%, transparent 58%), radial-gradient(85% 70% at 50% 100%, #24304d 0%, transparent 62%), linear-gradient(180deg, #2a1f2b 0%, #241d33 52%, #1b1b2e 100%);
+  --ground: #221c2c; --panel: #342b3f; --panel-2: #3d3349; --ink: #f2e9dc; --ink-soft: #c9bcc4; --muted: #a596a7;
+  --rule: rgba(242, 233, 220, .16); --border: #f2e9dc; --shadow: rgba(0, 0, 0, .5); --accent-ink: #e59a74; --marker: rgba(192, 112, 72, .42);
+  --lamp-on: #ffcf6e; --lamp-glow: rgba(255, 207, 110, .3); --lamp-off: #4a3f56; --need: #f09a8f; --need-glow: rgba(240, 154, 143, .3); --on-need: #1a141f; --good: #8fc47a;
+  --m0: #4a87c8; --m1: #d0685a; --m2: #9a6fd0; --m3: #c08a1c;
+  --c0: #5a8a9c; --c1: #bd786b; --c2: #9a7a9f; --c3: #c9a24a; --c4: #7d9064; --chip-ink: #1a141f;
+  --cord: rgba(242, 233, 220, .3); --meter-track: #2a2234;
+  --w-top: #a9c2dc; --w-mid: #c3aad0; --w-bot: #e0a08f; --w-shadow: #000;
 }
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
-  margin: 0; background: var(--chassis); color: var(--ink);
-  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
+  margin: 0; color: var(--ink); background-color: var(--ground); background-image: var(--dream); background-attachment: fixed;
+  font: 14px/1.45 "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
-.din { font-family: "DIN Alternate", "DIN Condensed", "Bahnschrift", "Roboto", -apple-system, sans-serif; font-weight: 700; letter-spacing: .01em; }
+.din { font-weight: 800; letter-spacing: -.02em; }
 .num { font-variant-numeric: tabular-nums; }
+.hand { font-family: "Caveat", cursive; font-weight: 600; color: var(--accent-ink); }
 button { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
-
-.chassis { max-width: 1680px; margin: 0 auto; padding: 10px; display: grid; gap: 8px; }
-.plate { background: var(--plate); border-radius: 4px; box-shadow: inset 0 1px 0 var(--lamp-ring); padding: 14px 16px; min-width: 0; }
-h2 { font-family: "DIN Alternate", "DIN Condensed", "Bahnschrift", "Roboto", -apple-system, sans-serif; font-weight: 700; font-size: 15px; letter-spacing: .02em; margin: 0 0 10px; color: var(--ink); }
-h3 { font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 16px 0 6px; }
+:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 .muted { color: var(--muted); }
-.ink2 { color: var(--ink-2); }
+.ink2 { color: var(--ink-soft); }
+h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-height: 1; color: var(--accent-ink); margin: 18px 0 8px; transform: rotate(-1deg); transform-origin: left; }
 
-/* Top bar */
-.topbar { display: flex; align-items: center; gap: 18px; padding: 10px 16px; }
-.brand { display: flex; align-items: center; gap: 10px; }
-.wordmark { font-family: "DIN Alternate", "DIN Condensed", "Bahnschrift", "Roboto", -apple-system, sans-serif; font-weight: 700; font-size: 20px; letter-spacing: .04em; }
-.status { color: var(--ink-2); font-size: 13px; }
-.status b { color: var(--ink); font-weight: 600; }
-.spacer { flex: 1; }
-.clock { font-size: 13px; color: var(--ink-2); }
-.clock .din { font-size: 17px; color: var(--ink); margin-right: 6px; }
-.iconbtn { background: none; border: 1px solid var(--rule); border-radius: 4px; padding: 4px 9px; cursor: pointer; font-size: 12px; color: var(--ink-2); }
-.iconbtn:hover { background: var(--plate-2); }
+.chassis { max-width: 1680px; margin: 0 auto; padding: 16px 22px 30px; display: grid; gap: 30px; }
+.plate { background: var(--panel); border: 2px solid var(--border); border-radius: 2px; box-shadow: 6px 6px 0 var(--shadow); padding: 20px 18px 16px; min-width: 0; position: relative; }
+.plate.big { box-shadow: 9px 9px 0 var(--shadow); }
 
-.banner { background: var(--need); color: #fff; border-radius: 4px; padding: 10px 16px; font-weight: 500; }
+/* Tickets: section labels. */
+.ticket {
+  display: inline-block; font-weight: 900; font-size: 15px; letter-spacing: -.02em; text-transform: uppercase; line-height: 1;
+  padding: 8px 12px 7px; border: 3px solid var(--border); border-radius: 2px; background: var(--panel); color: var(--chip-ink);
+  box-shadow: 4px 4px 0 var(--shadow); transform: rotate(-1.4deg); transition: transform .2s; margin: -38px 0 10px -8px; position: relative; z-index: 1;
+}
+.ticket:hover { transform: rotate(0deg); }
+.t-sky { background: var(--c0); } .t-rose { background: var(--c1); transform: rotate(1.2deg); } .t-lilac { background: var(--c2); transform: rotate(-.8deg); }
+.t-butter { background: var(--c3); transform: rotate(.9deg); } .t-sage { background: var(--c4); transform: rotate(-1.8deg); }
+.t-rose:hover, .t-lilac:hover, .t-butter:hover, .t-sage:hover { transform: rotate(0deg); }
+
+/* Masthead */
+.masthead { display: flex; align-items: center; gap: 16px 22px; flex-wrap: wrap; padding: 6px 2px 0; }
+.brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.logo { width: 68px; height: 68px; flex: none; }
+.dark-only { display: none; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .dark-only { display: block; } :root:not([data-theme="light"]) .light-only { display: none; } }
+:root[data-theme="dark"] .dark-only { display: block; }
+:root[data-theme="dark"] .light-only { display: none; }
+.wordmark { margin: 0; line-height: 0; font-size: 0; min-width: 0; }
+.wordmark svg { display: block; height: 50px; width: auto; max-width: 100%; }
+.tagline { font-family: "Caveat", cursive; font-weight: 600; font-size: 20px; line-height: 1; color: var(--accent-ink); margin-top: 6px; transform: rotate(-1.5deg); transform-origin: left; }
+.mast-right { margin-left: auto; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.live-ticket { margin: 0; display: inline-flex; align-items: center; gap: 9px; text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 600; padding: 7px 12px; color: var(--ink); background: var(--panel); transform: rotate(1deg); }
+.live-ticket b { font-weight: 800; }
+.clock { font-size: 13px; color: var(--ink-soft); }
+.clock .din { font-size: 22px; color: var(--ink); margin-right: 6px; }
+.iconbtn { background: var(--panel); border: 2px solid var(--border); border-radius: 2px; padding: 6px 11px; cursor: pointer; font-size: 12px; font-weight: 800; color: var(--ink); box-shadow: 3px 3px 0 var(--shadow); }
+.iconbtn:hover { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--shadow); }
+
+.banner { background: var(--need); color: var(--on-need); border: 2px solid var(--border); border-radius: 2px; padding: 11px 16px; font-weight: 700; box-shadow: 5px 5px 0 var(--shadow); }
 .banner[hidden] { display: none; }
 
 /* Lamps */
-.lamp { width: 10px; height: 10px; border-radius: 50%; background: var(--lamp-off); box-shadow: inset 0 0 0 1px var(--lamp-ring); flex: none; display: inline-block; }
-.lamp.on { background: var(--lamp-on); box-shadow: 0 0 0 1px var(--lamp-on), 0 0 10px 2px var(--lamp-glow); animation: breathe 2.4s ease-in-out infinite; }
-.lamp.need { background: var(--need); box-shadow: 0 0 0 1px var(--need), 0 0 10px 2px var(--need-glow); animation: breathe 1.2s ease-in-out infinite; }
-.lamp.done { background: transparent; box-shadow: inset 0 0 0 1.5px var(--cord); }
-@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
-@media (prefers-reduced-motion: reduce) { .lamp.on, .lamp.need { animation: none; } .flash { animation: none !important; } }
+.lamp { width: 12px; height: 12px; border-radius: 50%; background: var(--lamp-off); border: 1.5px solid var(--border); flex: none; display: inline-block; }
+.lamp.on { background: var(--lamp-on); box-shadow: 0 0 0 3px var(--lamp-glow); animation: breathe 2.4s ease-in-out infinite; }
+.lamp.need { background: var(--need); box-shadow: 0 0 0 3px var(--need-glow); animation: breathe 1.2s ease-in-out infinite; }
+.lamp.done { background: transparent; border-style: dashed; }
+@keyframes breathe { 50% { box-shadow: 0 0 0 7px transparent; } }
+@media (prefers-reduced-motion: reduce) { .lamp.on, .lamp.need { animation: none; } .ticket, .iconbtn { transition: none; } .flash, .fresh { animation: none !important; } }
 
-/* Readout sentence */
-.readout { font-size: 15px; color: var(--ink-2); line-height: 1.7; padding: 12px 16px; }
-.readout .din { font-size: 19px; color: var(--ink); margin: 0 1px; }
-.readout .live-n { color: var(--ink); }
+/* Readout */
+.readout { font-size: 17px; line-height: 1.8; color: var(--ink-soft); padding: 16px 20px; }
+.readout .din { font-size: 22px; color: var(--ink); margin: 0 1px; padding-inline: .12em; background-image: linear-gradient(transparent 58%, var(--marker) 58%, var(--marker) 92%, transparent 92%); }
+.readout .live-n { color: var(--ink); font-weight: 800; }
 
 /* Main grid */
-.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 8px; align-items: start; }
-.side, .col { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(330px, 410px); gap: 30px; align-items: start; }
+.side, .col { display: grid; gap: 34px; min-width: 0; align-content: start; }
 
 /* Board */
-.board-head, .row { display: grid; grid-template-columns: 14px minmax(200px, 1fr) 128px 168px 96px 82px 54px; gap: 10px; align-items: center; }
-.board-head { font-size: 11px; color: var(--muted); padding: 0 6px 6px; border-bottom: 1px solid var(--rule); }
+.board-head, .row { display: grid; grid-template-columns: 14px minmax(200px, 1fr) 150px 170px 96px 84px 54px; gap: 10px; align-items: center; }
+.board-head { font-size: 11px; font-weight: 800; color: var(--muted); padding: 0 6px 8px; border-bottom: 2px solid var(--border); }
 .board-head span:nth-child(6), .board-head span:nth-child(7), .row .tok, .row .ago { text-align: right; }
 .rows { display: grid; }
-.row { padding: 5px 6px; min-height: 46px; border-radius: 3px; }
-.row:hover { background: var(--plate-2); }
-.row.flash { animation: flash 1.2s ease-out; }
-@keyframes flash { from { background: var(--plate-2); } to { background: transparent; } }
+.row { padding: 6px; min-height: 50px; border-bottom: 1px dashed var(--rule); }
+.row:hover { background: var(--panel-2); }
+.row.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { from { background: var(--marker); } to { background: transparent; } }
 .who { display: flex; align-items: stretch; min-width: 0; }
-.cords { display: flex; flex: none; align-self: stretch; margin: -5px 0; }
+.cords { display: flex; flex: none; align-self: stretch; margin: -6px 0; }
 .cords span { width: 16px; position: relative; flex: none; }
 .cords .pipe::before, .cords .tee::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; border-left: 2px solid var(--cord); }
-.cords .tee::after { content: ""; position: absolute; left: 9px; top: calc(50% - 1px); width: 7px; border-top: 2px solid var(--cc, var(--cord)); }
-.cords .elbow::after { content: ""; position: absolute; left: 7px; top: 0; height: calc(50% + 1px); width: 9px; border-left: 2px solid var(--cord); border-bottom: 2px solid var(--cc, var(--cord)); border-bottom-left-radius: 7px; }
+.cords .tee::after { content: ""; position: absolute; left: 9px; top: calc(50% - 1px); width: 7px; border-top: 3px solid var(--cc, var(--cord)); }
+.cords .elbow::after { content: ""; position: absolute; left: 7px; top: 0; height: calc(50% + 1px); width: 9px; border-left: 2px solid var(--cord); border-bottom: 3px solid var(--cc, var(--cord)); border-bottom-left-radius: 7px; }
 .names { min-width: 0; padding-left: 2px; display: flex; flex-direction: column; justify-content: center; }
-.t { font-weight: 550; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row.depth0 .t { font-weight: 650; }
+.t { font-weight: 650; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.depth0 .t { font-weight: 850; }
 .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.model { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.model .eff { color: var(--muted); font-size: 12px; margin-left: 4px; }
-.sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; }
+.model { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; }
+.chip { display: inline-block; font-size: 12px; font-weight: 750; color: var(--chip-ink); padding: 2px 7px 1px; border: 1.5px solid var(--border); border-radius: 2px; white-space: nowrap; line-height: 1.35; }
+.chip.c0 { background: var(--c0); } .chip.c1 { background: var(--c1); } .chip.c2 { background: var(--c2); } .chip.c3 { background: var(--c3); }
+.model .eff { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1.5px solid var(--border); margin-right: 6px; vertical-align: -1px; }
 .sw.m0 { background: var(--m0); } .sw.m1 { background: var(--m1); } .sw.m2 { background: var(--m2); } .sw.m3 { background: var(--m3); }
 .now { font-size: 13px; min-width: 0; }
-.now .step { font-weight: 600; }
-.now .need { color: var(--need); font-weight: 600; }
+.now .step { font-weight: 800; }
+.now .need { color: var(--need); font-weight: 850; }
 .now .line2 { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ctx { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
-.meter { flex: 1; height: 4px; border-radius: 2px; background: var(--meter-track); overflow: hidden; min-width: 30px; }
-.meter b { display: block; height: 100%; background: var(--ink-2); border-radius: 2px; }
-.meter b.warn { background: var(--warn); } .meter b.crit { background: var(--need); }
-.tok { font-size: 13px; }
-.tok small { display: block; font-size: 11px; color: var(--muted); }
+.ctx { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-soft); }
+.meter { flex: 1; height: 8px; border: 1.5px solid var(--border); border-radius: 2px; background: var(--meter-track); overflow: hidden; min-width: 30px; }
+.meter b { display: block; height: 100%; background: var(--c0); }
+.meter b.warn { background: var(--c3); } .meter b.crit { background: var(--need); }
+.tok { font-size: 13px; font-weight: 750; }
+.tok small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
 .ago { font-size: 12px; color: var(--muted); }
-.group-label { font-size: 12px; color: var(--muted); padding: 14px 6px 4px; border-top: 1px solid var(--rule); margin-top: 6px; }
-.empty { color: var(--muted); padding: 18px 6px; }
+.group-label { font-family: "Caveat", cursive; font-weight: 700; font-size: 21px; color: var(--accent-ink); padding: 16px 6px 2px; border-top: 2px solid var(--border); margin-top: 8px; }
+.empty { font-family: "Caveat", cursive; font-size: 22px; color: var(--muted); padding: 18px 6px; }
 
-/* Window */
-.window .hero { display: flex; align-items: baseline; gap: 2px 3px; flex-wrap: wrap; }
-.window .big { font-size: 56px; line-height: 1; }
-.window .pct { font-size: 26px; }
-.window .of { font-size: 13px; color: var(--ink-2); flex-basis: 100%; margin-top: 2px; }
-.wbar { position: relative; height: 12px; margin: 14px 0 6px; border-radius: 3px; background: var(--meter-track); display: flex; gap: 2px; overflow: visible; }
+/* The 5-hour plate */
+.window .hero { display: flex; align-items: baseline; gap: 2px 4px; flex-wrap: wrap; }
+.window .big { font-size: 70px; font-weight: 900; letter-spacing: -.05em; line-height: .9; }
+.window .pct { font-size: 30px; font-weight: 900; }
+.window .note { font-family: "Caveat", cursive; font-weight: 700; font-size: 25px; color: var(--accent-ink); transform: rotate(-4deg); margin-left: 10px; display: inline-block; }
+.window .of { font-size: 13px; color: var(--ink-soft); flex-basis: 100%; margin-top: 6px; }
+.wbar { position: relative; height: 18px; margin: 16px 0 6px; border: 2px solid var(--border); border-radius: 2px; background: var(--meter-track); display: flex; gap: 2px; }
 .wbar i { display: block; height: 100%; }
-.wbar i:first-child { border-radius: 3px 0 0 3px; }
-.wbar .capline { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink); border-radius: 1px; }
+.wbar .capline { position: absolute; top: -7px; bottom: -7px; width: 3px; background: var(--border); }
 .wscale { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
-.facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 14px 0 0; font-size: 13px; }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; margin: 16px 0 0; font-size: 13px; }
 .facts dt { color: var(--muted); }
-.facts dd { margin: 0; }
+.facts dd { margin: 0; font-weight: 600; }
 .fine { font-size: 12px; color: var(--muted); margin: 12px 0 0; }
-.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-soft); margin-top: 8px; align-items: center; }
 
-/* Feed */
-.feed-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.feed-head h2 { margin: 0; }
-.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
-.seg button { background: none; border: 0; padding: 3px 10px; font-size: 12px; color: var(--ink-2); cursor: pointer; }
-.seg button[aria-pressed="true"] { background: var(--plate-2); color: var(--ink); font-weight: 600; }
-.feed ol { list-style: none; margin: 0; padding: 0; max-height: 520px; overflow-y: auto; scrollbar-width: thin; }
-.feed li { display: grid; grid-template-columns: 58px 12px 1fr; gap: 8px; padding: 5px 2px; font-size: 13px; border-bottom: 1px solid var(--rule); align-items: baseline; }
+/* Crumbs (feed) */
+.feed-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.feed-head h2 { margin-bottom: 4px; }
+.seg { display: inline-flex; border: 2px solid var(--border); border-radius: 2px; overflow: hidden; box-shadow: 3px 3px 0 var(--shadow); }
+.seg button { background: var(--panel); border: 0; padding: 4px 10px; font-size: 12px; font-weight: 700; color: var(--ink-soft); cursor: pointer; }
+.seg button + button { border-left: 2px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--c3); color: var(--chip-ink); font-weight: 850; }
+.feed ol { list-style: none; margin: 8px 0 0; padding: 0; max-height: 560px; overflow-y: auto; scrollbar-width: thin; }
+.feed li { display: grid; grid-template-columns: 60px 12px 1fr; gap: 8px; padding: 6px 2px; font-size: 13px; border-bottom: 1px dashed var(--rule); align-items: baseline; }
 .feed li:last-child { border-bottom: 0; }
 .feed li .time { color: var(--muted); font-size: 12px; }
-.feed li .k { width: 8px; height: 8px; border-radius: 50%; align-self: center; }
+.feed li .k { width: 9px; height: 9px; border-radius: 50%; align-self: center; border: 1.5px solid var(--border); }
 .k.start { background: var(--lamp-on); }
-.k.end { box-shadow: inset 0 0 0 1.5px var(--ink-2); }
-.k.alert { background: var(--need); }
-.k.tools { background: var(--cord); border-radius: 1px; height: 2px; width: 10px; }
-.k.pr { box-shadow: inset 0 0 0 1.5px var(--m0); border-radius: 2px; }
-.k.other { background: var(--ink-2); width: 6px; height: 6px; }
-.feed li .what b { font-weight: 600; }
+.k.end { background: transparent; }
+.k.alert { background: var(--need); border-radius: 2px; }
+.k.tools { background: var(--c3); border-radius: 1px; width: 8px; height: 8px; transform: rotate(18deg); }
+.k.pr { background: var(--c0); border-radius: 2px; }
+.k.other { background: var(--c2); }
+.feed li .what b { font-weight: 800; }
 .feed li .what .muted { font-size: 12px; }
-.feed li.fresh { animation: flash 1.6s ease-out; }
+.feed li.fresh { animation: flash 1.8s ease-out; }
 
-/* Six hours */
+/* Charts */
 .chart { position: relative; }
 .chart svg { display: block; width: 100%; overflow: visible; }
-.axis { font-size: 11px; fill: var(--muted); }
+.axis { font-size: 11px; fill: var(--muted); font-family: "Archivo", sans-serif; }
 .grid-line { stroke: var(--rule); stroke-width: 1; }
-.base-line { stroke: var(--cord); stroke-width: 1; }
-.mark-line { stroke: var(--ink-2); stroke-width: 1.5; }
+.base-line { stroke: var(--border); stroke-width: 2; }
+.mark-line { stroke: var(--accent-ink); stroke-width: 2; }
 .hit { fill: transparent; }
-.chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
-.chart-head h2 { margin: 0; }
+.chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 
 /* Days */
-.dayrow { display: grid; grid-template-columns: 112px minmax(0, 1fr) 132px; gap: 14px; align-items: end; padding: 6px 0; border-bottom: 1px solid var(--rule); }
+.dayrow { display: grid; grid-template-columns: 112px minmax(0, 1fr) 132px; gap: 14px; align-items: end; padding: 7px 0; border-bottom: 1px dashed var(--rule); }
 .dayrow:last-of-type { border-bottom: 0; }
-.dlabel b { display: block; font-weight: 600; }
+.dlabel b { display: block; font-weight: 850; }
 .dlabel small { display: block; font-size: 12px; color: var(--muted); }
 .dsum { text-align: right; }
-.dsum .big { font-size: 26px; line-height: 1; display: block; }
+.dsum .big { font-size: 28px; font-weight: 900; line-height: 1; display: block; }
 .dsum small { font-size: 12px; color: var(--muted); }
 .dsum.zero .big { color: var(--muted); }
 .daxis { display: grid; grid-template-columns: 112px minmax(0, 1fr) 132px; gap: 14px; }
@@ -203,51 +239,56 @@ h3 { font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 16px 0 6px;
 .daxis span:first-child { transform: none; }
 .daxis span:last-child { transform: translateX(-100%); }
 .cmpwrap { overflow-x: auto; margin-top: 18px; }
-.cmpt th { font-size: 12px; color: var(--ink); font-weight: 600; text-align: right; }
+.cmpt th { font-size: 12px; color: var(--ink); font-weight: 850; text-align: right; }
 .cmpt th:first-child, .cmpt td:first-child { text-align: left; color: var(--muted); font-size: 12px; }
-.cmpt td { font-size: 14px; }
-.cmpt td small { color: var(--muted); font-size: 11px; margin-left: 4px; }
-.cmpt td.zero { color: var(--muted); }
-.split { display: inline-flex; gap: 2px; height: 8px; width: 120px; border-radius: 4px; overflow: hidden; background: var(--meter-track); vertical-align: middle; }
+.cmpt td { font-size: 14px; font-weight: 650; }
+.cmpt td small { color: var(--muted); font-size: 11px; font-weight: 500; margin-left: 4px; }
+.cmpt td.zero { color: var(--muted); font-weight: 500; }
+.split { display: inline-flex; gap: 2px; height: 10px; width: 120px; border: 1.5px solid var(--border); border-radius: 2px; overflow: hidden; background: var(--meter-track); vertical-align: middle; }
 .split i { display: block; height: 100%; }
-.dcols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin-top: 6px; }
-.dcols h3 { margin-top: 18px; }
-.daynone { color: var(--muted); font-size: 13px; }
-.cmp { font-size: 12px; color: var(--ink-2); }
-.cmp b { font-weight: 600; color: var(--ink); }
-.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.list li { display: grid; grid-template-columns: minmax(0, 1fr) 64px; gap: 8px; font-size: 13px; align-items: center; }
+.dcols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; margin-top: 6px; }
+.daynone { font-family: "Caveat", cursive; font-size: 21px; color: var(--muted); margin: 4px 0; }
+.cmp { font-size: 12px; color: var(--ink-soft); }
+.cmp b { font-weight: 800; color: var(--ink); }
+.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.list li { display: grid; grid-template-columns: minmax(0, 1fr) 66px; gap: 8px; font-size: 13px; align-items: center; }
 .list .lbl { min-width: 0; }
-.list .lbl span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list .lbl .nm { display: flex; align-items: baseline; gap: 2px; min-width: 0; }
+.list .lbl .nm em { font-style: normal; font-weight: 650; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list .lbl .nm .prime { flex: none; }
+.prs .lbl span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .list .lbl small { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.list .bar { height: 4px; border-radius: 2px; background: var(--meter-track); margin-top: 4px; overflow: hidden; }
-.list .bar i { display: block; height: 100%; background: var(--ink-2); border-radius: 2px; }
-.list .v { text-align: right; font-size: 12px; color: var(--ink-2); }
-.prs li { grid-template-columns: 52px minmax(0, 1fr); }
-.state { font-size: 11px; color: var(--muted); }
-.state.merged { color: var(--good); } .state.open { color: var(--ink-2); }
-.noday { color: var(--muted); padding: 28px 0 8px; font-size: 14px; }
+.list .bar { height: 8px; border: 1.5px solid var(--border); border-radius: 2px; background: var(--meter-track); margin-top: 4px; overflow: hidden; }
+.list .bar i { display: block; height: 100%; }
+.list .v { text-align: right; font-size: 12px; color: var(--ink-soft); font-weight: 650; }
+.prime { font-family: "Caveat", cursive; font-weight: 700; font-size: 18px; color: var(--need); margin-left: 6px; display: inline-block; transform: rotate(-4deg); }
+.state { font-size: 11px; font-weight: 700; color: var(--muted); }
+.state.merged { color: var(--good); } .state.open { color: var(--ink-soft); }
 
-/* Ledger */
-.tabs { display: inline-flex; gap: 2px; border: 1px solid var(--rule); border-radius: 4px; padding: 2px; }
-.tabs button { background: none; border: 0; border-radius: 3px; padding: 3px 10px; cursor: pointer; font-size: 12px; color: var(--ink-2); }
-.tabs button[aria-selected="true"] { background: var(--plate-2); color: var(--ink); font-weight: 600; }
+/* The bill */
+.tabs { display: inline-flex; border: 2px solid var(--border); border-radius: 2px; overflow: hidden; box-shadow: 3px 3px 0 var(--shadow); }
+.tabs button { background: var(--panel); border: 0; padding: 4px 11px; cursor: pointer; font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+.tabs button + button { border-left: 2px solid var(--border); }
+.tabs button[aria-selected="true"] { background: var(--c4); color: var(--chip-ink); font-weight: 850; }
 .tablewrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th { text-align: right; font-weight: 500; font-size: 11px; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
-td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; font-variant-numeric: tabular-nums; }
+th { text-align: right; font-weight: 800; font-size: 11px; color: var(--muted); padding: 7px 8px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+td { text-align: right; padding: 7px 8px; border-bottom: 1px dashed var(--rule); white-space: nowrap; font-variant-numeric: tabular-nums; }
 th:first-child, td:first-child { text-align: left; }
 td:first-child { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 tr:last-child td { border-bottom: 0; }
-tfoot td { font-weight: 600; border-top: 1px solid var(--rule); }
+tfoot td { font-weight: 900; border-top: 3px double var(--border); }
 .apptag { font-size: 11px; color: var(--muted); margin-left: 6px; }
+.bill #ledger { margin-top: 8px; }
+.norefunds { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; color: var(--accent-ink); text-align: right; margin: 10px 4px 0; transform: rotate(-2deg); }
 
-footer { font-size: 12px; color: var(--ink-2); padding: 4px 6px 14px; display: flex; flex-wrap: wrap; gap: 6px 20px; }
+footer { font-size: 12px; color: var(--ink-soft); padding: 0 4px 6px; display: flex; flex-wrap: wrap; gap: 6px 20px; }
 footer span { white-space: nowrap; }
+footer b { font-weight: 800; }
 
-#tip { position: fixed; z-index: 10; pointer-events: none; background: var(--plate); color: var(--ink); border-radius: 4px; padding: 8px 10px; font-size: 12px; line-height: 1.5; box-shadow: var(--shadow-tip), inset 0 0 0 1px var(--rule); max-width: 300px; opacity: 0; transition: opacity .08s; }
+#tip { position: fixed; z-index: 10; pointer-events: none; background: var(--panel); color: var(--ink); border: 2px solid var(--border); border-radius: 2px; padding: 8px 10px; font-size: 12px; line-height: 1.5; box-shadow: 4px 4px 0 var(--shadow); max-width: 300px; opacity: 0; transition: opacity .08s; }
 #tip.show { opacity: 1; }
-#tip b { font-weight: 600; }
+#tip b { font-weight: 800; }
 
 @media (max-width: 1180px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
@@ -255,18 +296,20 @@ footer span { white-space: nowrap; }
   .dcols { grid-template-columns: minmax(0, 1fr); gap: 0; }
 }
 @media (max-width: 760px) {
-  .chassis { padding: 6px; gap: 6px; }
+  .chassis { padding: 10px 12px 22px; gap: 30px; }
   .side { grid-template-columns: minmax(0, 1fr); }
   /* On a phone, keep what each line is doing; drop context, totals, last. */
-  .board-head, .row { grid-template-columns: 12px minmax(0, 1fr) 76px 92px; }
+  .board-head, .row { grid-template-columns: 12px minmax(0, 1fr) 84px 92px; }
   .board-head span:nth-child(5), .board-head span:nth-child(6), .board-head span:nth-child(7),
   .row .ctx, .row .tok, .row .ago, .row .model .eff { display: none; }
   .row .now .line2 { display: none; }
-  .topbar { flex-wrap: wrap; gap: 8px 14px; }
+  .logo { width: 48px; height: 48px; }
+  .wordmark svg { height: 34px; }
+  .mast-right { margin-left: 0; }
   .clock { display: none; }
   .dayrow, .daxis { grid-template-columns: 72px minmax(0, 1fr) 76px; gap: 8px; }
   .dsum .big { font-size: 20px; }
-  .window .big { font-size: 46px; }
+  .window .big { font-size: 54px; }
 }
 @media (forced-colors: active) { .lamp.on, .lamp.need { forced-color-adjust: none; } }
 </style>
@@ -274,34 +317,42 @@ footer span { white-space: nowrap; }
 <body>
 <div class="chassis">
   <div class="banner" id="banner" hidden></div>
-  <header class="plate topbar">
-    <div class="brand"><span class="lamp" id="hdrLamp" aria-hidden="true"></span><span class="wordmark">Switchboard</span></div>
-    <div class="status" id="status" aria-live="off">Connecting</div>
-    <div class="spacer"></div>
-    <div class="clock" id="clock"></div>
-    <button class="iconbtn" id="themeBtn" type="button">Light</button>
+  <header class="masthead">
+    <div class="brand">
+      <img class="logo light-only" src="/assets/logo.png" alt="" width="68" height="68">
+      <img class="logo dark-only" src="/assets/logo-dark.png" alt="" width="68" height="68">
+      <div>
+        <h1 class="wordmark" id="wordmark" aria-label="Who Ate My Tokens?">Who Ate My Tokens?</h1>
+        <div class="tagline">your agents, caught snacking live</div>
+      </div>
+    </div>
+    <div class="mast-right">
+      <div class="ticket live-ticket"><span class="lamp" id="hdrLamp" aria-hidden="true"></span><span id="status" aria-live="off">Connecting</span></div>
+      <div class="clock" id="clock"></div>
+      <button class="iconbtn" id="themeBtn" type="button">Light</button>
+    </div>
   </header>
 
-  <section class="plate readout" id="readout" aria-label="Today so far">Reading your agents</section>
+  <section class="plate readout" id="readout" aria-label="Today so far">Counting crumbs</section>
 
   <main class="grid">
     <div class="col">
-      <section class="plate" aria-labelledby="h-board">
-        <h2 id="h-board">Running now</h2>
+      <section class="plate big" aria-labelledby="h-board">
+        <h2 class="ticket t-sky" id="h-board">Who's eating right now</h2>
         <div class="board-head" aria-hidden="true"><span></span><span>Thread</span><span>Model</span><span>Doing</span><span>Context</span><span>Today</span><span>Last</span></div>
         <div class="rows" id="board" role="list"></div>
         <div class="rows" id="outside" role="list"></div>
       </section>
       <section class="plate" aria-labelledby="h-spark">
-        <div class="chart-head"><h2 id="h-spark">Last six hours</h2><div class="legend" id="sparkLegend"></div></div>
+        <div class="chart-head"><h2 class="ticket t-butter" id="h-spark">Last six hours</h2><div class="legend" id="sparkLegend"></div></div>
         <div class="chart" id="spark"></div>
       </section>
     </div>
     <aside class="side">
-      <section class="plate window" id="window" aria-label="Five-hour window"></section>
+      <section class="plate big window" id="window" aria-label="The 5-hour plate"></section>
       <section class="plate feed" aria-labelledby="h-feed">
         <div class="feed-head">
-          <h2 id="h-feed">What just happened</h2>
+          <h2 class="ticket t-rose" id="h-feed">Crumbs</h2>
           <div class="seg" role="group" aria-label="Feed filter">
             <button type="button" data-f="all" aria-pressed="true">All</button>
             <button type="button" data-f="key" aria-pressed="false">Milestones</button>
@@ -312,13 +363,13 @@ footer span { white-space: nowrap; }
     </aside>
   </main>
 
-  <section class="plate" aria-labelledby="h-days">
-    <div class="chart-head"><h2 id="h-days">Three days</h2><div class="legend" id="daysLegend"></div></div>
+  <section class="plate big" aria-labelledby="h-days">
+    <div class="chart-head"><h2 class="ticket t-lilac" id="h-days">Three days</h2><div class="legend" id="daysLegend"></div></div>
     <div id="days"></div>
   </section>
 
-  <section class="plate" aria-labelledby="h-ledger">
-    <div class="chart-head"><h2 id="h-ledger">Tokens</h2><div class="tabs" role="tablist" id="ledgerTabs"></div></div>
+  <section class="plate bill" aria-labelledby="h-ledger">
+    <div class="chart-head"><h2 class="ticket t-sage" id="h-ledger">The bill</h2><div class="tabs" role="tablist" id="ledgerTabs"></div></div>
     <div id="ledger"></div>
   </section>
 
@@ -377,11 +428,63 @@ function modelName(m) {
   if (!m) return "Unknown";
   const x = m.replace(/^claude-/, "").replace(/\[.*\]$/, "");
   const p = x.split("-");
+  if (!m.startsWith("claude-")) {
+    // Other providers' models, e.g. a Codex subagent: "gpt-6.1-sol" reads "GPT 6.1 Sol".
+    return p.map((q) => (q === "gpt" ? "GPT" : q.charAt(0).toUpperCase() + q.slice(1))).join(" ");
+  }
   const name = p[0].charAt(0).toUpperCase() + p[0].slice(1);
   const ver = p.slice(1).filter((q) => /^\d+$/.test(q)).join(".");
   return ver ? name + " " + ver : name;
 }
 const sw = (fam) => `<i class="sw m${fam}" aria-hidden="true"></i>`;
+// A model as a sticker chip: the site's pastel fill, ink text.
+const chip = (model) => `<span class="chip c${family(model)}">${esc(modelName(model))}</span>`;
+
+// The wordmark, drawn in chunky pixels like the `clean` banner: a 5x7 grid
+// per letter, filled with a vertical gradient, with a hard ink shadow.
+const GLYPHS = {
+  W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
+  H: ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
+  O: ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+  A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+  T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+  E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+  M: ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+  Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+  K: ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
+  N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+  S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+  "?": ["01110", "10001", "00001", "00010", "00100", "00000", "00100"],
+};
+function pixelWordmark(text) {
+  const rects = [];
+  let x = 0;
+  for (const ch of text) {
+    if (ch === " ") { x += 3; continue; }
+    const g = GLYPHS[ch];
+    if (!g) continue;
+    g.forEach((row, y) => {
+      // Merge runs of lit pixels in a row into one rect: no seams.
+      let run = -1;
+      for (let i = 0; i <= 5; i++) {
+        const on = i < 5 && row[i] === "1";
+        if (on && run < 0) run = i;
+        if (!on && run >= 0) { rects.push([x + run, y, i - run]); run = -1; }
+      }
+    });
+    x += 6;
+  }
+  // Two units per pixel keeps every edge, and the half-pixel shadow, on
+  // whole numbers, so crisp edges never round unevenly.
+  const w = x * 2, h = 7 * 2 + 1;
+  const body = (dx, dy, fill) => rects.map(([rx, ry, rw]) => `<rect x="${rx * 2 + dx}" y="${ry * 2 + dy}" width="${rw * 2}" height="2" style="fill:${fill}"/>`).join("");
+  return `<svg viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges" role="img" aria-label="Who Ate My Tokens?">
+    <defs><linearGradient id="wm" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${h}">
+      <stop offset="0" style="stop-color:var(--w-top)"/><stop offset=".55" style="stop-color:var(--w-mid)"/><stop offset="1" style="stop-color:var(--w-bot)"/>
+    </linearGradient></defs>
+    <g>${body(1, 1, "var(--w-shadow)")}</g><g>${body(0, 0, "url(#wm)")}</g></svg>`;
+}
+$("wordmark").innerHTML = pixelWordmark("WHO ATE MY TOKENS?");
 const APPS = { t3: "T3", t3code: "T3 Code", desktop: "Claude Desktop", cli: "Claude CLI", sdk: "SDK", notetaker: "Note-taker", other: "Other" };
 const EP = { "t3-code": "T3 Code", "claude-desktop": "Claude Desktop", cli: "Claude CLI", "sdk-ts": "SDK" };
 const tokTotal = (t) => (t ? t.reduce((a, b) => a + b, 0) : 0);
@@ -437,7 +540,7 @@ function renderHeader() {
     banner.textContent = (h.t3_error ? "Can't read T3's database: " + h.t3_error + "." : "Connecting to T3's database.") + " Live thread data is unavailable until it can; token figures still update.";
   } else if (h.warnings && h.warnings.length) {
     banner.hidden = false;
-    banner.textContent = "T3 changed some fields Switchboard reads, so some thread numbers may be wrong: " + h.warnings.join("; ") + ".";
+    banner.textContent = "T3 changed some fields this dashboard reads, so some thread numbers may be wrong: " + h.warnings.join("; ") + ".";
   } else banner.hidden = true;
   const live = L.threads.some((t) => t.run && t.run.status !== "waiting") || L.subs.some((s) => s.status === "running");
   const need = L.today.waiting > 0;
@@ -445,7 +548,7 @@ function renderHeader() {
 }
 function renderStatus() {
   const st = $("status");
-  if (!S.connected) { st.innerHTML = "Reconnecting to Switchboard"; return; }
+  if (!S.connected) { st.innerHTML = "Reconnecting to the dashboard"; return; }
   const L = S.live; if (!L) return;
   const ev = L.health.last_event;
   const evtxt = ev ? "last T3 event <b>" + ago(now() - ev) + (now() - ev < 45000 ? "" : " ago") + "</b>" : "no T3 events yet";
@@ -460,7 +563,7 @@ function renderReadout() {
   if (!L.health.tx_ready) { $("readout").textContent = "Reading today's transcripts"; return; }
   const n = (v) => `<span class="din num">${compact(v)}</span>`;
   const parts = [];
-  parts.push(`Today so far: ${n(t.output)} output tokens from ${n(t.calls)} requests (${n(t.tokens)} tokens in all), active for <span class="din num">${(t.active_min / 60).toFixed(1)}</span> hours.`);
+  parts.push(`Today your agents ate ${n(t.output)} output tokens over ${n(t.calls)} requests (${n(t.tokens)} counting the cache), across <span class="din num">${(t.active_min / 60).toFixed(1)}</span> busy hours.`);
   if (L.health.t3 === "ok") parts.push(`T3 ran ${n(t.runs)} runs in ${n(t.threads)} threads and ${n(t.subagents)} subagents, and linked ${n(t.prs)} PRs.`);
   else parts.push("T3 thread data is unavailable right now.");
   if (t.hits) parts.push(`You reached the usage limit ${t.hits === 1 ? "once" : t.hits + " times"} today.`);
@@ -468,7 +571,7 @@ function renderReadout() {
   if (t.runs_live) live.push(`<span class="live-n">${t.runs_live} run${t.runs_live === 1 ? "" : "s"} going</span>`);
   if (t.subagents_live) live.push(`<span class="live-n">${t.subagents_live} subagent${t.subagents_live === 1 ? "" : "s"} working</span>`);
   if (t.waiting) live.push(`<span class="live-n" style="color:var(--need)">${t.waiting} waiting on you</span>`);
-  parts.push(live.length ? "Right now: " + live.join(", ") + "." : "Nothing is running right now.");
+  parts.push(live.length ? "Right now: " + live.join(", ") + "." : "Nobody is eating right now.");
   $("readout").innerHTML = parts.join(" ");
 }
 
@@ -564,7 +667,7 @@ function threadRow(n, depth, trail, last, L) {
     key: t.id, depth, live: !!run,
     html: `<span class="lamp ${lamp}" aria-hidden="true"></span>
       <div class="who">${cordsHtml(depth, trail, last, fam)}<div class="names"><div class="t" title="${esc(t.title)}">${esc(t.title)}</div><div class="sub">${esc(subBits.join(", "))}</div></div></div>
-      <div class="model">${sw(fam)}${esc(modelName(model))}${eff ? `<span class="eff">${esc(eff)}</span>` : ""}${t.fast ? '<span class="eff">fast</span>' : ""}</div>
+      <div class="model">${chip(model)}${eff ? `<span class="eff">${esc(eff)}</span>` : ""}${t.fast ? '<span class="eff">fast</span>' : ""}</div>
       <div class="now">${nowHtml}</div>${ctxHtml}${tokHtml}
       <div class="ago num" data-ago="${lastTs}"></div>`,
   };
@@ -586,7 +689,7 @@ function subRow(n, depth, trail, last) {
     key: n.id, depth, live,
     html: `<span class="lamp ${lamp}" aria-hidden="true"></span>
       <div class="who">${cordsHtml(depth, trail, last, fam)}<div class="names"><div class="t">${esc(s.title || "Subagent")}</div><div class="sub">subagent</div></div></div>
-      <div class="model">${sw(fam)}${esc(modelName(s.model))}</div>
+      <div class="model">${chip(s.model)}</div>
       <div class="now">${nowHtml}</div><div class="ctx"></div><div class="tok muted"></div>
       <div class="ago num" data-ago="${s.updated}"></div>`,
   };
@@ -622,7 +725,7 @@ function renderBoard() {
   const items = tree.map(({ n, depth, trail, last }) => (n.kind === "sub" ? subRow(n, depth, trail, last) : threadRow(n, depth, trail, last, L)));
   const board = $("board");
   if (!items.length) board.innerHTML = L.health.t3 === "ok"
-    ? '<div class="empty">No T3 threads were active in the last three hours.</div>'
+    ? '<div class="empty">Nobody is eating. No T3 threads were active in the last three hours.</div>'
     : '<div class="empty">T3 thread data is unavailable. The banner above says why.</div>';
   else { if (board.querySelector(".empty")) board.innerHTML = ""; keyed(board, items); }
 
@@ -631,7 +734,7 @@ function renderBoard() {
     const fam = family(o.model);
     out.push({ key: "o:" + o.id, depth: 0, html: `<span class="lamp ${o.active ? "on" : ""}" aria-hidden="true"></span>
       <div class="who"><div class="names"><div class="t">${esc(o.label)}</div><div class="sub">${esc(APPS[o.app] || o.app)}${o.cwd && o.cwd !== o.label ? ", " + esc(o.cwd) : ""}</div></div></div>
-      <div class="model">${sw(fam)}${esc(modelName(o.model))}</div>
+      <div class="model">${chip(o.model)}</div>
       <div class="now">${o.active ? '<span class="step">Working</span>' : '<span class="ink2">Idle</span>'} <span class="muted" data-ago="${o.last}"></span></div>
       <div class="ctx"></div>
       <div class="tok num">${compact(o.today.t[1])}<small>${compact(tokTotal(o.today.t))} total</small></div>
@@ -641,7 +744,7 @@ function renderBoard() {
     const nt = L.notetaker;
     out.push({ key: "o:notetaker", depth: 0, html: `<span class="lamp ${nt.active ? "on" : ""}" aria-hidden="true"></span>
       <div class="who"><div class="names"><div class="t">claude-mem note-taker</div><div class="sub">writes memory notes after your sessions, ${full(nt.today.n)} calls today</div></div></div>
-      <div class="model">${sw(family(nt.model))}${esc(modelName(nt.model))}</div>
+      <div class="model">${chip(nt.model)}</div>
       <div class="now">${nt.active ? '<span class="step">Writing notes</span>' : '<span class="ink2">Idle</span>'} <span class="muted" data-ago="${nt.last}"></span></div>
       <div class="ctx"></div>
       <div class="tok num">${compact(nt.today.t[1])}<small>${compact(tokTotal(nt.today.t))} total</small></div>
@@ -649,7 +752,7 @@ function renderBoard() {
   }
   const outside = $("outside");
   if (out.length) {
-    if (!outside.querySelector(".group-label")) { outside.innerHTML = '<div class="group-label" data-key="label">Outside T3, last 30 minutes</div>'; }
+    if (!outside.querySelector(".group-label")) { outside.innerHTML = '<div class="group-label" data-key="label">eating outside T3, last 30 minutes</div>'; }
     const box = outside.querySelector(".rowsbox") || (() => { const d = document.createElement("div"); d.className = "rowsbox"; outside.appendChild(d); return d; })();
     keyed(box, out);
   } else outside.innerHTML = "";
@@ -664,17 +767,19 @@ function renderWindow() {
   const cap = w.cap;
   const share = (v, total) => { const p = (v / total) * 100; return p > 0 && p < 1 ? "<1%" : Math.round(p) + "%"; };
   const famRow = (vals, total) => vals.map((v, i) => v > 0 ? `<span>${sw(i)}${FAM[i]} ${share(v, total)}</span>` : "").join("");
-  let h = "<h2>5-hour window</h2>";
+  let h = '<h2 class="ticket t-rose">The 5-hour plate</h2>';
+  // A handwritten aside that changes with how much of the plate is gone.
+  const note = (p) => (p < 0.5 ? "plenty left" : p < 0.8 ? "pace yourself" : p < 1 ? "nearly licked clean" : "past last time's limit");
   if (!w.active) {
-    h += `<div class="hero"><span class="big din">0</span><span class="pct din">%</span><span class="of">No window open. The next request starts one, and it lasts five hours.</span></div>`;
+    h += `<div class="hero"><span class="big din">0</span><span class="pct din">%</span><span class="note">clean plate</span><span class="of">No window open. The next request starts a fresh five hours.</span></div>`;
     if (cap) h += `<dl class="facts"><dt>Last limit hit</dt><dd>${hhmm(cap.hit_ms)}, ${dur(now() - cap.hit_ms)} ago</dd></dl>`;
   } else {
     const used = w.used;
     if (cap && w.pct != null) {
       const pct = w.pct * 100;
       const scaleMax = Math.max(100, pct * 1.05);
-      h += `<div class="hero"><span class="big din num">${pct < 10 ? pct.toFixed(1) : Math.round(pct)}</span><span class="pct din">%</span>
-        <span class="of">of the usage that reached the limit at ${hhmm(cap.hit_ms)}${now() - cap.hit_ms > 20 * 3600e3 ? " on an earlier day" : ""}</span></div>`;
+      h += `<div class="hero"><span class="big din num">${pct < 10 ? pct.toFixed(1) : Math.round(pct)}</span><span class="pct din">%</span><span class="note">${note(w.pct)}</span>
+        <span class="of">eaten, measured against the usage that hit the limit at ${hhmm(cap.hit_ms)}${now() - cap.hit_ms > 20 * 3600e3 ? " on an earlier day" : ""}</span></div>`;
       const segs = w.by_family.map((v, i) => v > 0 ? `<i class="m${i}" style="width:${((v / cap.used) * 100 / scaleMax * 100).toFixed(2)}%;background:var(--m${i})" data-tip="<b>${FAM[i]}</b>: ${((v / cap.used) * 100).toFixed(1)}% of the cap"></i>` : "").join("");
       h += `<div class="wbar">${segs}<span class="capline" style="left:calc(${(100 / scaleMax * 100).toFixed(2)}% - 1px)" data-tip="The level at which you hit the limit last time"></span></div>
         <div class="wscale"><span>0</span><span>limit, last time</span></div>`;
@@ -752,7 +857,7 @@ function renderFeed() {
     prev = el;
   }
   for (const [k, el] of existing) if (!seen.has(k)) el.remove();
-  if (!items.length) list.innerHTML = '<li class="muted" data-key="none"><span></span><span></span><span>Nothing yet. Events show up here as T3 threads and Claude sessions work.</span></li>';
+  if (!items.length) list.innerHTML = '<li class="muted" data-key="none"><span></span><span></span><span>No crumbs yet. Events show up here as your agents work.</span></li>';
   S.fresh.clear();
   S.feedReady = true;
 }
@@ -945,16 +1050,21 @@ function renderDays(force) {
 
   // Where the usage went, per day.
   h += `<div class="dcols">` + days.map((d, i) => {
-    let col = `<div><h3>Where ${i === 0 ? "today's" : i === 1 ? "yesterday's" : esc(names[i]) + "'s"} usage went</h3>`;
-    if (!d.sources.length) return col + `<p class="daynone">Nothing recorded.</p></div>`;
+    let col = `<div><h3>who ate ${i === 0 ? "today's" : i === 1 ? "yesterday's" : esc(names[i]) + "'s"} tokens</h3>`;
+    if (!d.sources.length) return col + `<p class="daynone">nobody ate a thing</p></div>`;
     const fw = famsOf(d).reduce((a, b) => a + b, 0) || 1;
     const maxS = Math.max(...d.sources.map((s) => s.total.w)) || 1;
-    col += `<ol class="list">` + d.sources.slice(0, 7).map((s) => {
+    col += `<ol class="list">` + d.sources.slice(0, 7).map((s, rank) => {
       const ctx = s.app === "t3" ? (s.up ? "under " + s.up : s.project || "T3") : (APPS[s.app] || s.app) + (s.project && s.project !== s.label ? ", " + s.project : "");
       const tipTxt = `<b>${s.label}</b><br>${full(s.total.t[1])} output tokens, ${full(s.total.n)} requests${s.sub.n ? "<br>" + Math.round((s.sub.w / s.total.w) * 100) + "% by subagents" : ""}${s.sessions > 1 ? "<br>" + s.sessions + " sessions" : ""}`;
-      return `<li data-tip="${esc(tipTxt)}"><div class="lbl"><span>${esc(s.label)}</span><small>${esc(ctx)}</small><div class="bar"><i style="width:${(s.total.w / maxS) * 100}%"></i></div></div><div class="v num">${Math.round((s.total.w / fw) * 100)}%<br>${compact(s.total.t[1])} out</div></li>`;
+      // The bar takes the colour of the model that did most of the eating.
+      const fams = [0, 0, 0, 0];
+      for (const [m, u] of Object.entries(s.models)) fams[family(m)] += u.w;
+      const top = fams.indexOf(Math.max(...fams));
+      const suspect = rank === 0 && d.sources.length > 1 ? '<span class="prime">prime suspect</span>' : "";
+      return `<li data-tip="${esc(tipTxt)}"><div class="lbl"><div class="nm"><em>${esc(s.label)}</em>${suspect}</div><small>${esc(ctx)}</small><div class="bar"><i style="width:${(s.total.w / maxS) * 100}%;background:var(--m${top})"></i></div></div><div class="v num">${Math.round((s.total.w / fw) * 100)}%<br>${compact(s.total.t[1])} out</div></li>`;
     }).join("") + "</ol>";
-    if (d.sources.length > 7 || d.sources_more) col += `<p class="fine">${d.sources.length - 7 + d.sources_more > 0 ? d.sources.length - 7 + d.sources_more + " more in the Tokens table" : ""}</p>`;
+    if (d.sources.length > 7 || d.sources_more) col += `<p class="fine">${d.sources.length - 7 + d.sources_more > 0 ? d.sources.length - 7 + d.sources_more + " more on the bill" : ""}</p>`;
     return col + "</div>";
   }).join("") + "</div>";
 
@@ -983,16 +1093,17 @@ function renderLedger() {
   tabs.innerHTML = D.days.map((d, i) => `<button type="button" role="tab" aria-selected="${i === S.ledgerDay}" data-i="${i}">${esc(names[i] || dayParts(d.day).wd)}</button>`).join("");
   tabs.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { S.ledgerDay = Number(b.dataset.i); renderLedger(); }));
   const d = D.days[S.ledgerDay];
-  if (!d || !d.total.n) { $("ledger").innerHTML = `<p class="muted">No requests recorded on this day.</p>`; return; }
+  if (!d || !d.total.n) { $("ledger").innerHTML = `<p class="muted">Nothing on the bill for this day.</p>`; return; }
   const totalW = d.total.w || 1;
   const hit = (t) => { const inAll = t[0] + t[2] + t[3] + t[4]; return inAll ? Math.round((t[2] / inAll) * 100) + "%" : ""; };
   const row = (label, u, extra) => `<tr><td>${label}${extra || ""}</td><td>${full(u.n)}</td><td>${compact(u.t[0])}</td><td>${compact(u.t[2])}</td><td>${compact(u.t[3] + u.t[4])}</td><td>${compact(u.t[1])}</td><td>${hit(u.t)}</td><td>${Math.round((u.w / totalW) * 100)}%</td></tr>`;
   const head = `<thead><tr><th></th><th>Requests</th><th>Input</th><th>Cache read</th><th>Cache write</th><th>Output</th><th>Cache hits</th><th data-tip="Share of the day's usage, weighting each model by its list price">Share</th></tr></thead>`;
   const models = Object.entries(d.models).sort((a, b) => b[1].w - a[1].w);
-  let h = `<div class="tablewrap"><table>${head}<tbody>` + models.map(([m, u]) => row(`${sw(family(m))}${esc(modelName(m))}`, u)).join("") + `</tbody><tfoot>${row("All models", d.total)}</tfoot></table></div>`;
-  h += `<h3>By thread and session</h3><div class="tablewrap"><table>${head.replace("<th></th>", "<th>Where</th>")}<tbody>` +
+  let h = `<div class="tablewrap"><table>${head}<tbody>` + models.map(([m, u]) => row(chip(m), u)).join("") + `</tbody><tfoot>${row("Total", d.total)}</tfoot></table></div>`;
+  h += `<h3>itemised, by thread and session</h3><div class="tablewrap"><table>${head.replace("<th></th>", "<th>Where</th>")}<tbody>` +
     d.sources.map((s) => row(esc(s.label), s.total, `<span class="apptag">${esc(APPS[s.app] || s.app)}</span>`)).join("") + `</tbody></table></div>` +
-    (d.sources_more ? `<p class="fine">${d.sources_more} smaller sources are not listed.</p>` : "");
+    (d.sources_more ? `<p class="fine">${d.sources_more} smaller sources are not listed.</p>` : "") +
+    '<p class="norefunds">no refunds.</p>';
   $("ledger").innerHTML = h;
 }
 
@@ -1002,7 +1113,7 @@ function renderFoot() {
   const h = L.health;
   $("foot").innerHTML = `<span>Reads T3 and Claude Code files read-only.</span>
     <span>T3 event <span class="num">${full(h.seq)}</span>, ${full(h.files)} transcript files tracked, ${h.launch_links} launch links.</span>
-    <span>Switchboard itself: <b>${(h.mem / 1048576).toFixed(1)} MB</b> memory, ${h.cpu}% CPU, up ${dur(h.uptime * 1000)}.</span>`;
+    <span>This dashboard itself: <b>${(h.mem / 1048576).toFixed(1)} MB</b> memory, ${h.cpu}% CPU, up ${dur(h.uptime * 1000)}.</span>`;
 }
 
 // ------------------------------------------------------------------ ticking

@@ -1,12 +1,12 @@
 #!/bin/sh
-# Start, stop or check Switchboard on this Mac.
-# Usage: scripts/switchboard start | stop | restart | status | open | logs | build
+# Start, stop or check Who Ate My Tokens on this Mac.
+# Usage: scripts/wamt start | stop | restart | status | open | logs | build
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$ROOT/target/release/switchboard"
+BIN="$ROOT/target/release/wamt"
 STATE="$ROOT/.state"
-PIDF="$STATE/switchboard.pid"
-LOG="$STATE/switchboard.log"
+PIDF="$STATE/wamt.pid"
+LOG="$STATE/wamt.log"
 URL="http://127.0.0.1:7317"
 
 running() { [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
@@ -20,7 +20,7 @@ case "${1:-status}" in
     [ -x "$BIN" ] || { echo "Not built yet. Run: $0 build"; exit 1; }
     mkdir -p "$STATE"
     # A fresh log on every start keeps it small.
-    SWITCHBOARD_STATE="$STATE" nohup "$BIN" >"$LOG" 2>&1 </dev/null &
+    WAMT_STATE="$STATE" nohup "$BIN" >"$LOG" 2>&1 </dev/null &
     echo $! >"$PIDF"
     sleep 1
     if running; then
