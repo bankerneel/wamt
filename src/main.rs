@@ -434,7 +434,13 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
         let changed = if now - last_full >= 60_000 {
             last_full = now;
             last_tracked = now;
-            t.full_scan(window_start, now)
+            let c = t.full_scan(window_start, now);
+            // Give back pages freed by parsing (most after the first pass).
+            let released = sys::release_free_memory();
+            if first && released > 0 {
+                log(format!("returned {} MB of freed memory to macOS", released / 1_048_576));
+            }
+            c
         } else if now - last_tracked >= 5000 {
             last_tracked = now;
             t.poll_tracked(window_start, now)

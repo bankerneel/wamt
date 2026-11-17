@@ -81,6 +81,24 @@ pub fn memory_bytes() -> u64 {
     }
 }
 
+/// Hands memory that malloc is holding but not using back to the OS. After
+/// a large read (the first backfill parses hundreds of MB), macOS otherwise
+/// keeps those freed pages charged to the process. Returns bytes released.
+pub fn release_free_memory() -> usize {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut libc::c_void, goal: usize) -> usize;
+        }
+        // SAFETY: a null zone means "all zones"; goal 0 means "as much as possible".
+        unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        0
+    }
+}
+
 impl Sys {
     pub fn new() -> Self {
         Sys { last_cpu: cpu_seconds(), last_wall: Instant::now(), started: Instant::now(), cpu_pct: 0.0 }
