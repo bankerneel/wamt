@@ -182,6 +182,8 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
     let (mut last_full, mut last_subs, mut last_runs, mut last_live, mut last_launch) = (0i64, 0i64, 0i64, 0i64, 0i64);
     let mut force = true;
     let mut runs_pending = true;
+    let mut ctx_dirty: HashSet<String> = HashSet::new();
+    let mut last_ctx_full = 0i64;
     log(format!("T3 ready in {} ms: {} threads, {} sessions mapped", t0.elapsed().as_millis(), t3.threads.len(), t3.session_thread.len()));
 
     loop {
@@ -203,6 +205,9 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
                         refresh.insert(ev.thread.clone());
                     }
                     "subagent.updated" => subs_dirty = true,
+                    "provider-turn.updated" => {
+                        ctx_dirty.insert(ev.thread.clone());
+                    }
                     "run-attempt.created" | "run-attempt.updated" | "provider-session.attached" => sessions_dirty = true,
                     "run.updated" | "run.created" => days_dirty = true,
                     _ => {}
@@ -261,19 +266,32 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
             active = t3.active_runs()?;
             waiting = t3.waiting(now)?;
             // Context fill for threads that are live or recently touched.
+            // Re-read only threads whose provider turn changed, plus a full
+            // pass once a minute.
             let mut want: HashSet<&str> = active.iter().map(|r| r.thread.as_str()).collect();
             for t in t3.threads.values() {
                 if now - t.updated < 3 * 60 * MS_PER_MIN {
                     want.insert(&t.id);
                 }
             }
-            let mut fresh = HashMap::new();
+            let full_ctx = now - last_ctx_full > 60_000;
+            if full_ctx {
+                last_ctx_full = now;
+            }
+            ctx.retain(|id, _| want.contains(id.as_str()));
             for id in want {
-                if let Some(c) = t3.ctx(id)? {
-                    fresh.insert(id.to_string(), c);
+                if full_ctx || ctx_dirty.contains(id) || !ctx.contains_key(id) {
+                    match t3.ctx(id)? {
+                        Some(c) => {
+                            ctx.insert(id.to_string(), c);
+                        }
+                        None => {
+                            ctx.remove(id);
+                        }
+                    }
                 }
             }
-            ctx = fresh;
+            ctx_dirty.clear();
         }
         runs_pending |= days_dirty;
         days_dirty = subs_dirty || force;
@@ -337,6 +355,7 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
     }
     let mut today = day_of(now_ms(), off);
     let (mut last_full, mut last_pub, mut last_save, mut last_prune) = (0i64, 0i64, now_ms(), 0i64);
+    let mut last_tracked = 0i64;
     let mut days_arc: Arc<Vec<(i32, DayAgg)>> = Arc::new(Vec::new());
     let mut first = true;
     loop {
@@ -354,9 +373,15 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
             last_prune = now;
         }
         let t0 = std::time::Instant::now();
-        let changed = if now - last_full >= 5000 {
+        // Hot files every second, tracked files and folders every 5 s, and a
+        // full sweep (which also catches resumed old sessions) every minute.
+        let changed = if now - last_full >= 60_000 {
             last_full = now;
+            last_tracked = now;
             t.full_scan(window_start, now)
+        } else if now - last_tracked >= 5000 {
+            last_tracked = now;
+            t.poll_tracked(window_start, now)
         } else {
             t.poll_hot(window_start, now)
         };

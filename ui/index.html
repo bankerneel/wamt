@@ -391,7 +391,10 @@ const tip = $("tip");
 document.addEventListener("pointermove", (e) => {
   const el = e.target.closest && e.target.closest("[data-tip]");
   if (!el) { tip.classList.remove("show"); return; }
-  tip.innerHTML = el.getAttribute("data-tip");
+  // Tooltip text is plain text plus <b>, </b> and <br> only. Escaping
+  // everything first and re-allowing those three tags means no tooltip
+  // string, wherever its data came from, can inject markup.
+  tip.innerHTML = esc(el.getAttribute("data-tip") || "").replace(/&lt;(\/?b|br)&gt;/g, "<$1>");
   tip.classList.add("show");
   const r = tip.getBoundingClientRect();
   let x = e.clientX + 14, y = e.clientY + 14;
@@ -938,7 +941,7 @@ function renderDays(force) {
     const maxS = Math.max(...d.sources.map((s) => s.total.w)) || 1;
     col += `<ol class="list">` + d.sources.slice(0, 7).map((s) => {
       const ctx = s.app === "t3" ? (s.up ? "under " + s.up : s.project || "T3") : (APPS[s.app] || s.app) + (s.project && s.project !== s.label ? ", " + s.project : "");
-      const tipTxt = `<b>${esc(s.label)}</b><br>${full(s.total.t[1])} output tokens, ${full(s.total.n)} requests${s.sub.n ? "<br>" + Math.round((s.sub.w / s.total.w) * 100) + "% by subagents" : ""}${s.sessions > 1 ? "<br>" + s.sessions + " sessions" : ""}`;
+      const tipTxt = `<b>${s.label}</b><br>${full(s.total.t[1])} output tokens, ${full(s.total.n)} requests${s.sub.n ? "<br>" + Math.round((s.sub.w / s.total.w) * 100) + "% by subagents" : ""}${s.sessions > 1 ? "<br>" + s.sessions + " sessions" : ""}`;
       return `<li data-tip="${esc(tipTxt)}"><div class="lbl"><span>${esc(s.label)}</span><small>${esc(ctx)}</small><div class="bar"><i style="width:${(s.total.w / maxS) * 100}%"></i></div></div><div class="v num">${Math.round((s.total.w / fw) * 100)}%<br>${compact(s.total.t[1])} out</div></li>`;
     }).join("") + "</ol>";
     if (d.sources.length > 7 || d.sources_more) col += `<p class="fine">${d.sources.length - 7 + d.sources_more > 0 ? d.sources.length - 7 + d.sources_more + " more in the Tokens table" : ""}</p>`;

@@ -83,6 +83,8 @@ pub struct Tailer {
     pub woke: Vec<String>,
     /// Limit hits recorded in the last poll (for the feed).
     pub new_hits: Vec<i64>,
+    /// Folders seen in the last listing, with their mtimes.
+    dirs: HashMap<PathBuf, i64>,
 }
 
 /// What a path is, judged from where it sits under the root.
@@ -165,6 +167,7 @@ impl Tailer {
             stats: TailStats::default(),
             woke: Vec::new(),
             new_hits: Vec::new(),
+            dirs: HashMap::new(),
         }
     }
 
@@ -200,36 +203,109 @@ impl Tailer {
         }
     }
 
-    fn list_files(&self) -> Vec<PathBuf> {
-        let mut out = Vec::new();
-        let Ok(projects) = fs::read_dir(&self.root) else { return out };
-        for p in projects.flatten() {
-            let Ok(ft) = p.file_type() else { continue };
-            if !ft.is_dir() {
-                continue;
-            }
-            let Ok(entries) = fs::read_dir(p.path()) else { continue };
-            for e in entries.flatten() {
-                let Ok(ft) = e.file_type() else { continue };
-                let path = e.path();
-                if ft.is_file() && path.extension().is_some_and(|x| x == "jsonl") {
-                    out.push(path);
-                } else if ft.is_dir() {
-                    let subs = path.join("subagents");
-                    if let Ok(se) = fs::read_dir(&subs) {
-                        for s in se.flatten() {
-                            let sp = s.path();
-                            let name = s.file_name();
-                            let name = name.to_string_lossy();
-                            if name.starts_with("agent-") && name.ends_with(".jsonl") {
-                                out.push(sp);
-                            }
-                        }
-                    }
+    /// Agent transcripts inside one `subagents` folder.
+    fn list_subagents(dir: &Path, files: &mut Vec<PathBuf>) {
+        if let Ok(se) = fs::read_dir(dir) {
+            for s in se.flatten() {
+                let name = s.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with("agent-") && name.ends_with(".jsonl") {
+                    files.push(s.path());
                 }
             }
         }
+    }
+
+    /// Session transcripts in one project folder, plus the agent transcripts
+    /// of its sessions. Records every folder visited with its mtime.
+    fn list_project(dir: &Path, files: &mut Vec<PathBuf>, dirs: &mut Vec<(PathBuf, i64)>) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        if let Ok(m) = fs::metadata(dir) {
+            dirs.push((dir.to_path_buf(), mtime_ms(&m)));
+        }
+        for e in entries.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            let path = e.path();
+            if ft.is_file() && path.extension().is_some_and(|x| x == "jsonl") {
+                files.push(path);
+            } else if ft.is_dir() {
+                let subs = path.join("subagents");
+                if let Ok(m) = fs::metadata(&subs) {
+                    dirs.push((subs.clone(), mtime_ms(&m)));
+                    Self::list_subagents(&subs, files);
+                }
+            }
+        }
+    }
+
+    fn list_files(&mut self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let mut dirs = Vec::new();
+        if let Ok(m) = fs::metadata(&self.root) {
+            dirs.push((self.root.clone(), mtime_ms(&m)));
+        }
+        if let Ok(projects) = fs::read_dir(&self.root) {
+            for p in projects.flatten() {
+                if p.file_type().is_ok_and(|ft| ft.is_dir()) {
+                    Self::list_project(&p.path(), &mut out, &mut dirs);
+                }
+            }
+        }
+        self.dirs = dirs.into_iter().collect();
         out
+    }
+
+    /// Cheaper than a full scan: re-stats the tracked files, and re-lists
+    /// only folders whose mtime changed (a new file changes its folder's
+    /// mtime). Falls back to a full scan when a new project folder appears.
+    pub fn poll_tracked(&mut self, window_start_ms: i64, now_ms: i64) -> bool {
+        let root_m = fs::metadata(&self.root).map(|m| mtime_ms(&m)).unwrap_or(0);
+        if self.dirs.get(&self.root).copied() != Some(root_m) {
+            return self.full_scan(window_start_ms, now_ms);
+        }
+        let mut changed = false;
+        let stale: Vec<PathBuf> = self
+            .dirs
+            .iter()
+            .filter(|(d, mt)| **d != self.root && fs::metadata(d).map(|m| mtime_ms(&m)).unwrap_or(0) != **mt)
+            .map(|(d, _)| d.clone())
+            .collect();
+        for dir in stale {
+            let mut files = Vec::new();
+            let mut dirs = Vec::new();
+            if dir.ends_with("subagents") {
+                if let Ok(m) = fs::metadata(&dir) {
+                    dirs.push((dir.clone(), mtime_ms(&m)));
+                }
+                Self::list_subagents(&dir, &mut files);
+            } else {
+                Self::list_project(&dir, &mut files, &mut dirs);
+            }
+            for (d, mt) in dirs {
+                self.dirs.insert(d, mt);
+            }
+            for path in files {
+                if self.files.contains_key(&path) {
+                    continue;
+                }
+                let Ok(meta) = fs::metadata(&path) else { continue };
+                if mtime_ms(&meta) < window_start_ms {
+                    continue;
+                }
+                let Some((session, sub, obs)) = classify(&self.root, &path) else { continue };
+                let agent_type = if sub { agent_type(&path) } else { None };
+                self.files.insert(path.clone(), Tracked { rec: FileRec::default(), session, sub, obs, agent_type });
+                changed |= self.read_if_grown(&path, &meta, window_start_ms, now_ms);
+            }
+        }
+        let tracked: Vec<PathBuf> = self.files.keys().cloned().collect();
+        for path in tracked {
+            if let Ok(meta) = fs::metadata(&path) {
+                changed |= self.read_if_grown(&path, &meta, window_start_ms, now_ms);
+            }
+        }
+        self.stats.files = self.files.len();
+        changed
     }
 
     /// Walks every transcript, starts tracking files touched inside the
@@ -538,6 +614,29 @@ mod tests {
         let mut t = Tailer::new(root.clone(), 330);
         t.full_scan(parse_ts_ms(START).unwrap(), parse_ts_ms(NOW).unwrap());
         assert_eq!(out_today(&t), 1);
+    }
+
+    #[test]
+    fn poll_tracked_finds_new_files_by_folder_change() {
+        let root = tmp("tracked");
+        let proj = root.join("-Users-x-projects-demo");
+        append(&proj.join("s1.jsonl"), &line("m1", "2026-11-17T15:00:00Z", 1));
+        let (ws, now) = (parse_ts_ms(START).unwrap(), parse_ts_ms(NOW).unwrap());
+        let mut t = Tailer::new(root.clone(), 330);
+        t.full_scan(ws, now);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        // A new session file, and a subagent folder for the first session.
+        append(&proj.join("s2.jsonl"), &line("m2", "2026-11-17T15:01:00Z", 10));
+        fs::create_dir_all(proj.join("s1/subagents")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(t.poll_tracked(ws, now));
+        assert_eq!(out_today(&t), 11);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        append(&proj.join("s1/subagents/agent-a.jsonl"), &line("m3", "2026-11-17T15:02:00Z", 100));
+        assert!(t.poll_tracked(ws, now));
+        assert_eq!(out_today(&t), 111);
+        // Nothing new: nothing changes.
+        assert!(!t.poll_tracked(ws, now));
     }
 
     #[test]

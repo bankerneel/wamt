@@ -1,0 +1,57 @@
+#!/bin/sh
+# Start, stop or check Switchboard on this Mac.
+# Usage: scripts/switchboard start | stop | restart | status | open | logs | build
+set -eu
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BIN="$ROOT/target/release/switchboard"
+STATE="$ROOT/.state"
+PIDF="$STATE/switchboard.pid"
+LOG="$STATE/switchboard.log"
+URL="http://127.0.0.1:7317"
+
+running() { [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
+
+case "${1:-status}" in
+  build)
+    cd "$ROOT" && cargo build --release
+    ;;
+  start)
+    if running; then echo "Already running (pid $(cat "$PIDF")) at $URL"; exit 0; fi
+    [ -x "$BIN" ] || { echo "Not built yet. Run: $0 build"; exit 1; }
+    mkdir -p "$STATE"
+    # A fresh log on every start keeps it small.
+    SWITCHBOARD_STATE="$STATE" nohup "$BIN" >"$LOG" 2>&1 </dev/null &
+    echo $! >"$PIDF"
+    sleep 1
+    if running; then
+      echo "Started (pid $(cat "$PIDF")) at $URL"
+    else
+      echo "Failed to start. Last log lines:"; tail -n 5 "$LOG"; rm -f "$PIDF"; exit 1
+    fi
+    ;;
+  stop)
+    if running; then kill "$(cat "$PIDF")"; echo "Stopped"; else echo "Not running"; fi
+    rm -f "$PIDF"
+    ;;
+  restart)
+    "$0" stop; "$0" start
+    ;;
+  status)
+    if running; then
+      pid="$(cat "$PIDF")"
+      echo "Running (pid $pid) at $URL"
+      ps -o rss=,%cpu= -p "$pid" | awk '{printf "Resident memory %.1f MB, CPU %s%%\n", $1/1024, $2}'
+    else
+      echo "Not running"
+    fi
+    ;;
+  open)
+    open "$URL"
+    ;;
+  logs)
+    tail -n 40 "$LOG"
+    ;;
+  *)
+    echo "Usage: $0 start | stop | restart | status | open | logs | build"; exit 2
+    ;;
+esac
