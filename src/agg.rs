@@ -5,7 +5,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::timeutil::{day_of, day_start_ms, hour_of, now_ms, MS_PER_HOUR, MS_PER_MIN};
+#[cfg(test)]
+use crate::timeutil::now_ms;
+use crate::timeutil::{day_of, day_start_ms, hour_of, MS_PER_HOUR, MS_PER_MIN};
 use crate::transcript::{family, weight, Tokens};
 
 pub const WINDOW_MS: i64 = 5 * MS_PER_HOUR;
@@ -273,6 +275,7 @@ pub struct UsageIn<'a> {
 
 impl Agg {
     /// Adds one API response. Returns false when it was already counted.
+    #[cfg(test)]
     pub fn add_usage(&mut self, u: UsageIn, off: i32) -> bool {
         self.add_usage_at(u, off, now_ms())
     }

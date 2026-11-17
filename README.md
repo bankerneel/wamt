@@ -18,8 +18,16 @@ scripts/wamt logs      # last log lines
 scripts/wamt stop
 ```
 
-It is not started at login. Start it when you want it; stopping it loses
-nothing, because the next start reads only what changed since.
+```sh
+scripts/wamt login on      # start at login (a LaunchAgent, low priority)
+scripts/wamt login off     # stop it and remove the login item
+scripts/wamt login status
+```
+
+With the login item on, `start`, `stop` and `restart` go through launchd;
+`stop` keeps it stopped until the next login. Stopping loses nothing: the next
+start reads only what changed since. The first start after an update that
+changes the cache format reads the last 7 days once (about 6 s).
 
 ## What it reads, and what it never does
 

@@ -447,9 +447,9 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
             }
         }
     }
-    let mut cx_saved = now_ms();
+    let mut cx_saved = 0i64; // save right after the first scan, so a quick restart reuses it
     let mut today = day_of(now_ms(), off);
-    let (mut last_full, mut last_pub, mut last_save, mut last_prune) = (0i64, 0i64, now_ms(), 0i64);
+    let (mut last_full, mut last_pub, mut last_save, mut last_prune) = (0i64, 0i64, 0i64, 0i64);
     let mut last_tracked = 0i64;
     let mut days_arc: Arc<Vec<(i32, DayAgg)>> = Arc::new(Vec::new());
     let mut week_part = payload::WeekPart::default();

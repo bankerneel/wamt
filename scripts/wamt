@@ -1,6 +1,7 @@
 #!/bin/sh
 # Start, stop or check Who Ate My Tokens on this Mac.
 # Usage: scripts/wamt start | stop | restart | status | open | logs | build
+#        scripts/wamt login on | off | status   (start at login via launchd)
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/target/release/wamt"
@@ -8,16 +9,52 @@ STATE="$ROOT/.state"
 PIDF="$STATE/wamt.pid"
 LOG="$STATE/wamt.log"
 URL="http://127.0.0.1:7317"
+LABEL="io.github.bankerneel.wamt"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+DOMAIN="gui/$(id -u)"
 
-running() { [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
+# When the login item is on, launchd owns the process and the pid file is unused.
+loaded() { launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; }
+pid() {
+  if loaded; then launchctl print "$DOMAIN/$LABEL" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }'
+  elif [ -f "$PIDF" ]; then cat "$PIDF"; fi
+}
+running() { p="$(pid)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+
+write_plist() {
+  mkdir -p "$(dirname "$PLIST")" "$STATE"
+  cat >"$PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>$BIN</string></array>
+  <key>EnvironmentVariables</key><dict><key>WAMT_STATE</key><string>$STATE</string></dict>
+  <key>WorkingDirectory</key><string>$ROOT</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><false/>
+  <key>ProcessType</key><string>Background</string>
+  <key>Nice</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$LOG</string>
+  <key>StandardErrorPath</key><string>$LOG</string>
+</dict>
+</plist>
+PL
+}
 
 case "${1:-status}" in
   build)
     cd "$ROOT" && cargo build --release
     ;;
   start)
-    if running; then echo "Already running (pid $(cat "$PIDF")) at $URL"; exit 0; fi
+    if running; then echo "Already running (pid $(pid)) at $URL"; exit 0; fi
     [ -x "$BIN" ] || { echo "Not built yet. Run: $0 build"; exit 1; }
+    if loaded; then
+      launchctl kickstart "$DOMAIN/$LABEL"; sleep 1
+      if running; then echo "Started by launchd (pid $(pid)) at $URL"; else echo "Failed to start. Last log lines:"; tail -n 5 "$LOG"; exit 1; fi
+      exit 0
+    fi
     mkdir -p "$STATE"
     # A fresh log on every start keeps it small.
     WAMT_STATE="$STATE" nohup "$BIN" >"$LOG" 2>&1 </dev/null &
@@ -30,16 +67,43 @@ case "${1:-status}" in
     fi
     ;;
   stop)
-    if running; then kill "$(cat "$PIDF")"; echo "Stopped"; else echo "Not running"; fi
+    if loaded; then
+      if running; then launchctl kill SIGTERM "$DOMAIN/$LABEL"; echo "Stopped (starts again at next login)"; else echo "Not running"; fi
+    elif running; then kill "$(pid)"; echo "Stopped"; else echo "Not running"; fi
     rm -f "$PIDF"
     ;;
   restart)
-    "$0" stop; "$0" start
+    if loaded; then launchctl kickstart -k "$DOMAIN/$LABEL"; sleep 1; echo "Restarted by launchd (pid $(pid))"; else "$0" stop; "$0" start; fi
+    ;;
+  login)
+    case "${2:-status}" in
+      on)
+        [ -x "$BIN" ] || { echo "Not built yet. Run: $0 build"; exit 1; }
+        # Hand over from a manually started copy so the port is free.
+        if ! loaded && running; then kill "$(pid)"; rm -f "$PIDF"; sleep 1; fi
+        loaded && launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+        write_plist
+        : >"$LOG"
+        launchctl bootstrap "$DOMAIN" "$PLIST"
+        sleep 1
+        if running; then echo "Starts at login now, and is running (pid $(pid)) at $URL"; echo "Turn off: $0 login off"
+        else echo "Loaded, but not running. Last log lines:"; tail -n 5 "$LOG"; exit 1; fi
+        ;;
+      off)
+        if loaded; then launchctl bootout "$DOMAIN/$LABEL"; fi
+        rm -f "$PLIST"
+        echo "No longer starts at login, and is stopped. Start by hand: $0 start"
+        ;;
+      status)
+        if loaded; then echo "Starts at login ($PLIST)"; else echo "Does not start at login"; fi
+        ;;
+      *) echo "Usage: $0 login on | off | status"; exit 2 ;;
+    esac
     ;;
   status)
     if running; then
-      pid="$(cat "$PIDF")"
-      echo "Running (pid $pid) at $URL"
+      pid="$(pid)"
+      echo "Running (pid $pid) at $URL$(loaded && echo ', managed by launchd')"
       ps -o rss=,%cpu= -p "$pid" | awk '{printf "Resident memory %.1f MB, CPU %s%%\n", $1/1024, $2}'
     else
       echo "Not running"
@@ -52,6 +116,6 @@ case "${1:-status}" in
     tail -n 40 "$LOG"
     ;;
   *)
-    echo "Usage: $0 start | stop | restart | status | open | logs | build"; exit 2
+    echo "Usage: $0 start | stop | restart | status | open | logs | build | login on|off|status"; exit 2
     ;;
 esac
