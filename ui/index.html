@@ -187,6 +187,10 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .wbar i { display: block; height: 100%; }
 .wbar .capline { position: absolute; top: -7px; bottom: -7px; width: 3px; background: var(--border); }
 .wbar .proj { background: repeating-linear-gradient(135deg, var(--border) 0 2px, transparent 2px 6px); opacity: .4; }
+.calib { margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.calib button.linkish { background: none; border: 0; padding: 0; color: var(--accent-ink); font-weight: 700; cursor: pointer; text-decoration: underline dotted; font-size: 12px; }
+.calib input { width: 64px; font: inherit; font-weight: 700; padding: 3px 6px; border: 2px solid var(--border); border-radius: 2px; background: var(--panel); color: var(--ink); }
+.calib .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 .forecast { font-size: 13px; margin: 12px 0 0; padding: 8px 10px; border: 2px dashed var(--border); border-radius: 2px; }
 .forecast .tag { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-left: 6px; }
 .wscale { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
@@ -417,7 +421,7 @@ footer b { font-weight: 800; }
       </section>
     </div>
     <aside class="side">
-      <section class="plate big window" id="window" aria-label="The 5-hour plate"></section>
+      <section class="plate big window" aria-label="The 5-hour plate"><div id="window"></div><div class="calib" id="calib"></div></section>
       <section class="plate feed" aria-labelledby="h-feed">
         <div class="feed-head">
           <h2 class="ticket t-rose" id="h-feed">Crumbs</h2>
@@ -719,7 +723,7 @@ function threadRow(n, depth, trail, last, L) {
   let nowHtml;
   if (waiting) {
     const since = (t.waiting && t.waiting.since) || (run && run.step && run.step.since) || t.updated;
-    nowHtml = `<span class="need">Needs you</span> <span data-since="${since}"></span><span class="line2">${esc(t.waiting ? t.waiting.kind.replace("_", " ") : "waiting")}</span>`;
+    nowHtml = `<span class="need">Needs you</span> <span data-since="${since}"></span><span class="line2">${esc(t.waiting ? t.waiting.kind.replace("_", " ") : "waiting")}${t.ctx && t.ctx.cache_exp > now() ? `, cache warm <span data-until="${t.ctx.cache_exp}"></span>` : ""}</span>`;
   } else if (run) {
     const st = run.step;
     const label = st ? st.label : run.status;
@@ -841,9 +845,52 @@ function renderBoard() {
 }
 
 // ------------------------------------------------------------------ window
+// ------------------------------------------------------------------ calibration
+// The meter only sees this Mac. Claude's own /usage number corrects it: the
+// ratio (real / meter) scales the cap, so the meter, bar and forecast agree.
+// Kept in this browser only; the server is never written to.
+const CAL = { v: null, open: false };
+try { CAL.v = JSON.parse(localStorage.getItem("wamt-cal") || "null"); } catch (_) {}
+CAL.q = Number(new URLSearchParams(location.search).get("cal")) || 0; // screenshots only, not saved
+function plateOf(L) {
+  const w = L && L.window;
+  if (CAL.q && !CAL.v && w && w.pct > 0) CAL.v = { k: CAL.q / (w.pct * 100), real: CAL.q, meter: Math.round(w.pct * 100), at: now(), start: w.start_ms };
+  if (!w || !w.active || !w.cap || w.pct == null || !CAL.v || !(CAL.v.k > 0)) return w;
+  const k = CAL.v.k, cap = { ...w.cap, used: w.cap.used / k };
+  let eta = null;
+  const left = cap.used - w.used;
+  if (left <= 0) eta = now();
+  else if (w.rate_per_min > 0) { const e = now() + (left / w.rate_per_min) * 60e3; if (e < w.end_ms) eta = e; }
+  return { ...w, cap, pct: w.pct * k, eta_ms: eta, calibrated: CAL.v };
+}
+function renderCalib() {
+  const el = $("calib"), w = S.live && S.live.window;
+  if (!w || !w.active || !w.cap || w.pct == null) { el.innerHTML = ""; return; }
+  const c = CAL.v;
+  const state = c ? `Calibrated at ${hhmm(c.at)}${c.start !== w.start_ms ? " (an earlier window)" : ""}: Claude said ${c.real}% when this meter said ${c.meter}%, so the meter is scaled by ${c.k.toFixed(2)}.` : "The meter only sees this Mac.";
+  el.innerHTML = CAL.open
+    ? `<div>${esc(state)}</div><div class="row"><label for="calIn">Claude's <b>/usage</b> says</label><input id="calIn" type="number" min="1" max="100" step="1" inputmode="numeric" aria-label="Percent used according to Claude's /usage">% used<button class="iconbtn" type="button" id="calSet">Set</button>${c ? '<button class="iconbtn" type="button" id="calClear">Clear</button>' : ""}<button class="linkish" type="button" id="calClose">cancel</button></div>`
+    : `<span>${esc(state)}</span> <button class="linkish" type="button" id="calOpen">${c ? "recalibrate" : "Calibrate from /usage"}</button>`;
+  const on = (id, f) => { const b = $(id); if (b) b.addEventListener("click", f); };
+  on("calOpen", () => { CAL.open = true; renderCalib(); $("calIn").focus(); });
+  on("calClose", () => { CAL.open = false; renderCalib(); });
+  on("calClear", () => { CAL.v = null; try { localStorage.removeItem("wamt-cal"); } catch (_) {} CAL.open = false; renderCalib(); renderWindow(); alerts(S.live); });
+  const set = () => {
+    const real = Number($("calIn").value), L = S.live, cw = L && L.window;
+    if (!(real > 0 && real <= 100) || !cw || !(cw.pct > 0)) return;
+    const meter = cw.pct * 100;
+    CAL.v = { k: real / meter, real: Math.round(real), meter: Math.round(meter), at: now(), start: cw.start_ms };
+    try { localStorage.setItem("wamt-cal", JSON.stringify(CAL.v)); } catch (_) {}
+    CAL.open = false; renderCalib(); renderWindow(); alerts(L);
+  };
+  on("calSet", set);
+  const inp = $("calIn"); if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") set(); if (e.key === "Escape") { CAL.open = false; renderCalib(); } });
+}
+
 function renderWindow() {
   const L = S.live; if (!L) return;
-  const w = L.window, el = $("window");
+  const w = plateOf(L), el = $("window");
+  if (!CAL.open) renderCalib();
   if (!w) { el.innerHTML = "<h2>5-hour window</h2><p class='muted'>Reading usage.</p>"; return; }
   const cap = w.cap;
   const share = (v, total) => { const p = (v / total) * 100; return p > 0 && p < 1 ? "<1%" : Math.round(p) + "%"; };
@@ -860,7 +907,7 @@ function renderWindow() {
       const pct = w.pct * 100;
       const scaleMax = Math.max(100, pct * 1.05);
       h += `<div class="hero"><span class="big din num">${pct < 10 ? pct.toFixed(1) : Math.round(pct)}</span><span class="pct din">%</span><span class="note">${note(w.pct)}</span>
-        <span class="of">eaten, measured against the usage that hit the limit at ${hhmm(cap.hit_ms)}${now() - cap.hit_ms > 20 * 3600e3 ? " on an earlier day" : ""}</span></div>`;
+        <span class="of">${w.calibrated ? "eaten, calibrated to Claude's /usage. Based on" : "eaten, measured against"} the usage that hit the limit at ${hhmm(cap.hit_ms)}${now() - cap.hit_ms > 20 * 3600e3 ? " on an earlier day" : ""}</span></div>`;
       const segs = w.by_family.map((v, i) => v > 0 ? `<i class="m${i}" style="width:${((v / cap.used) * 100 / scaleMax * 100).toFixed(2)}%;background:var(--m${i})" data-tip="<b>${FAM[i]}</b>: ${((v / cap.used) * 100).toFixed(1)}% of the cap"></i>` : "").join("");
       // Forecast: where the plate ends up at the current pace (server-side estimate).
       const minsLeft = Math.max(0, (w.end_ms - now()) / 60e3);
@@ -1389,7 +1436,7 @@ const A = { icon: null, key: "", seen: new Set(), primed: false, on: false };
   });
 })();
 function alerts(L) {
-  const w = L.window;
+  const w = plateOf(L);
   const pct = w && w.active && w.cap && w.pct != null ? w.pct : null;
   const waiting = L.threads.filter((t) => t.waiting || (t.run && t.run.status === "waiting"));
   const eating = L.threads.filter((t) => t.run && t.run.status !== "waiting").length;
@@ -1422,6 +1469,10 @@ function alerts(L) {
     events.push([`wait:${t.id}:${since}`, "A thread needs you", t.title || "A T3 thread is waiting on you"]);
   }
   if (pct != null && pct >= 0.8) events.push([`p80:${w.start_ms}`, `The plate is ${Math.round(pct * 100)}% eaten`, `Resets at ${hhmm(w.end_ms)}. Estimated from this Mac's usage.`]);
+  for (const t of waiting) {
+    const exp = t.ctx && t.ctx.cache_exp;
+    if (exp && exp > now() && exp - now() <= 5 * 60e3) events.push([`cold:${t.id}:${exp}`, "Cache going cold", `${t.title || "A thread"} waits on you; its prompt cache expires at ${hhmm(exp)}. Answer before then to avoid paying to rebuild it.`]);
+  }
   if (pct != null && pct < 1 && w.eta_ms != null) events.push([`eta:${w.start_ms}`, `At this pace, empty by ${hhmm(w.eta_ms)}`, `That is before the reset at ${hhmm(w.end_ms)}. Estimate.`]);
   for (const [k, title, body] of events) {
     if (A.seen.has(k)) continue;
