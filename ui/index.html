@@ -115,6 +115,7 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .clock { font-size: 13px; color: var(--ink-soft); }
 .clock .din { font-size: 22px; color: var(--ink); margin-right: 6px; }
 .iconbtn { background: var(--panel); border: 2px solid var(--border); border-radius: 2px; padding: 6px 11px; cursor: pointer; font-size: 12px; font-weight: 800; color: var(--ink); box-shadow: 3px 3px 0 var(--shadow); }
+.iconbtn[aria-pressed="true"] { background: var(--c3); color: var(--chip-ink, var(--ink)); }
 .iconbtn:hover { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--shadow); }
 
 .banner { background: var(--need); color: var(--on-need); border: 2px solid var(--border); border-radius: 2px; padding: 11px 16px; font-weight: 700; box-shadow: 5px 5px 0 var(--shadow); }
@@ -332,6 +333,7 @@ footer b { font-weight: 800; }
     <div class="mast-right">
       <div class="ticket live-ticket"><span class="lamp" id="hdrLamp" aria-hidden="true"></span><span id="status" aria-live="off">Connecting</span></div>
       <div class="clock" id="clock"></div>
+      <button class="iconbtn" id="notifyBtn" type="button" hidden>Notify me</button>
       <button class="iconbtn" id="themeBtn" type="button">Light</button>
     </div>
   </header>
@@ -1150,10 +1152,78 @@ function tick() {
 }
 setInterval(tick, 1000);
 
+// ------------------------------------------------------------------ alerts
+// Tab title, favicon badge and opt-in desktop notifications, all in the page.
+const A = { icon: null, key: "", seen: new Set(), primed: false, on: false };
+(function alertsInit() {
+  const img = new Image();
+  img.onload = () => { A.icon = img; A.key = ""; if (S.live) alerts(S.live); };
+  img.src = "/assets/favicon.png";
+  const btn = $("notifyBtn");
+  if (!("Notification" in window) || !window.isSecureContext) return;
+  try { A.on = localStorage.getItem("wamt-notify") === "1" && Notification.permission === "granted"; } catch (_) {}
+  const label = () => {
+    btn.textContent = A.on ? "Notifying" : "Notify me";
+    btn.setAttribute("aria-pressed", A.on ? "true" : "false");
+    btn.title = A.on ? "Desktop notifications are on: a thread waits on you, the plate passes 80%, or it will run out before the reset. Click to turn off." : "Get a desktop notification when a thread waits on you or the plate is running out";
+  };
+  btn.hidden = false; label();
+  btn.addEventListener("click", async () => {
+    if (A.on) A.on = false;
+    else A.on = (await Notification.requestPermission()) === "granted";
+    try { localStorage.setItem("wamt-notify", A.on ? "1" : "0"); } catch (_) {}
+    label();
+  });
+})();
+function alerts(L) {
+  const w = L.window;
+  const pct = w && w.active && w.cap && w.pct != null ? w.pct : null;
+  const waiting = L.threads.filter((t) => t.waiting || (t.run && t.run.status === "waiting"));
+  const eating = L.threads.filter((t) => t.run && t.run.status !== "waiting").length;
+  // Title: the most urgent part first, since tabs cut titles short.
+  const parts = [];
+  if (waiting.length) parts.push(`${waiting.length} needs you`);
+  if (pct != null) parts.push(`${Math.round(pct * 100)}%`);
+  if (eating) parts.push(`${eating} eating`);
+  document.title = parts.length ? parts.join(" · ") + " · Who Ate My Tokens" : "Who Ate My Tokens";
+  // Favicon: a ring that fills with the plate, a red dot when a thread waits.
+  const key = `${pct == null ? "-" : Math.round(pct * 50)}|${waiting.length > 0}`;
+  if (A.icon && key !== A.key) {
+    A.key = key;
+    const c = document.createElement("canvas"); c.width = c.height = 64;
+    const g = c.getContext("2d");
+    g.drawImage(A.icon, 8, 8, 48, 48);
+    if (pct != null) {
+      g.lineWidth = 6; g.lineCap = "round";
+      g.strokeStyle = "rgba(58,47,61,.18)"; g.beginPath(); g.arc(32, 32, 28, 0, 2 * Math.PI); g.stroke();
+      g.strokeStyle = pct >= 0.8 ? "#d4645a" : pct >= 0.5 ? "#c49012" : "#5f8f55";
+      g.beginPath(); g.arc(32, 32, 28, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * Math.min(pct, 1)); g.stroke();
+    }
+    if (waiting.length) { g.fillStyle = "#e0412f"; g.strokeStyle = "#fff"; g.lineWidth = 4; g.beginPath(); g.arc(50, 14, 12, 0, 2 * Math.PI); g.fill(); g.stroke(); }
+    document.querySelector('link[rel="icon"]').href = c.toDataURL("image/png");
+  }
+  // Notifications: once per event; whatever is already true on load is not news.
+  const events = [];
+  for (const t of waiting) {
+    const since = (t.waiting && t.waiting.since) || (t.run && t.run.step && t.run.step.since) || "";
+    events.push([`wait:${t.id}:${since}`, "A thread needs you", t.title || "A T3 thread is waiting on you"]);
+  }
+  if (pct != null && pct >= 0.8) events.push([`p80:${w.start_ms}`, `The plate is ${Math.round(pct * 100)}% eaten`, `Resets at ${hhmm(w.end_ms)}. Estimated from this Mac's usage.`]);
+  if (pct != null && pct < 1 && w.eta_ms != null) events.push([`eta:${w.start_ms}`, `At this pace, empty by ${hhmm(w.eta_ms)}`, `That is before the reset at ${hhmm(w.end_ms)}. Estimate.`]);
+  for (const [k, title, body] of events) {
+    if (A.seen.has(k)) continue;
+    A.seen.add(k);
+    if (A.primed && A.on) { try { new Notification(title, { body, tag: k, icon: "/assets/favicon.png" }); } catch (_) {} }
+  }
+  if (A.seen.size > 500) A.seen = new Set(events.map((e) => e[0]));
+  A.primed = true;
+}
+
 // ------------------------------------------------------------------ stream
 function onLive(L) {
   S.live = L; S.skew = L.now - Date.now(); S.lastMsg = Date.now();
   renderHeader(); renderReadout(); renderBoard(); renderWindow(); renderSpark(); renderFoot(); tick();
+  alerts(L);
 }
 function onDays(raw) { S.rawDays = raw; S.days = JSON.parse(raw); renderDays(false); }
 function onFeed(items, fresh) {
