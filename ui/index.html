@@ -34,7 +34,7 @@
   --on-need: #fffaf2;
   --good: #3f7d3a;
   /* Chart marks (validated: CVD and contrast on the cream panel). */
-  --m0: #3f7fc2; --m1: #d4645a; --m2: #8d5fc0; --m3: #c49012;
+  --m0: #3f7fc2; --m1: #d4645a; --m2: #8d5fc0; --m3: #c49012; --m4: #4f9a63;
   /* Chip and ticket fills: the site's own pastels, with ink text. */
   --c0: #a9c2dc; --c1: #e0a08f; --c2: #c3aad0; --c3: #f2dca8; --c4: #a8bd9e;
   --chip-ink: #3a2f3d;
@@ -49,7 +49,7 @@
     --ground: #221c2c; --panel: #342b3f; --panel-2: #3d3349; --ink: #f2e9dc; --ink-soft: #c9bcc4; --muted: #a596a7;
     --rule: rgba(242, 233, 220, .16); --border: #f2e9dc; --shadow: rgba(0, 0, 0, .5); --accent-ink: #e59a74; --marker: rgba(192, 112, 72, .42);
     --lamp-on: #ffcf6e; --lamp-glow: rgba(255, 207, 110, .3); --lamp-off: #4a3f56; --need: #f09a8f; --need-glow: rgba(240, 154, 143, .3); --on-need: #1a141f; --good: #8fc47a;
-    --m0: #4a87c8; --m1: #d0685a; --m2: #9a6fd0; --m3: #c08a1c;
+    --m0: #4a87c8; --m1: #d0685a; --m2: #9a6fd0; --m3: #c08a1c; --m4: #6fae7a;
     --c0: #5a8a9c; --c1: #bd786b; --c2: #9a7a9f; --c3: #c9a24a; --c4: #7d9064; --chip-ink: #1a141f;
     --cord: rgba(242, 233, 220, .3); --meter-track: #2a2234;
     --w-top: #a9c2dc; --w-mid: #c3aad0; --w-bot: #e0a08f; --w-shadow: #000;
@@ -61,7 +61,7 @@
   --ground: #221c2c; --panel: #342b3f; --panel-2: #3d3349; --ink: #f2e9dc; --ink-soft: #c9bcc4; --muted: #a596a7;
   --rule: rgba(242, 233, 220, .16); --border: #f2e9dc; --shadow: rgba(0, 0, 0, .5); --accent-ink: #e59a74; --marker: rgba(192, 112, 72, .42);
   --lamp-on: #ffcf6e; --lamp-glow: rgba(255, 207, 110, .3); --lamp-off: #4a3f56; --need: #f09a8f; --need-glow: rgba(240, 154, 143, .3); --on-need: #1a141f; --good: #8fc47a;
-  --m0: #4a87c8; --m1: #d0685a; --m2: #9a6fd0; --m3: #c08a1c;
+  --m0: #4a87c8; --m1: #d0685a; --m2: #9a6fd0; --m3: #c08a1c; --m4: #6fae7a;
   --c0: #5a8a9c; --c1: #bd786b; --c2: #9a7a9f; --c3: #c9a24a; --c4: #7d9064; --chip-ink: #1a141f;
   --cord: rgba(242, 233, 220, .3); --meter-track: #2a2234;
   --w-top: #a9c2dc; --w-mid: #c3aad0; --w-bot: #e0a08f; --w-shadow: #000;
@@ -159,10 +159,10 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; }
 .chip { display: inline-block; font-size: 12px; font-weight: 750; color: var(--chip-ink); padding: 2px 7px 1px; border: 1.5px solid var(--border); border-radius: 2px; white-space: nowrap; line-height: 1.35; }
-.chip.c0 { background: var(--c0); } .chip.c1 { background: var(--c1); } .chip.c2 { background: var(--c2); } .chip.c3 { background: var(--c3); }
+.chip.c0 { background: var(--c0); } .chip.c1 { background: var(--c1); } .chip.c2 { background: var(--c2); } .chip.c3 { background: var(--c3); } .chip.c4 { background: var(--c4); }
 .model .eff { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1.5px solid var(--border); margin-right: 6px; vertical-align: -1px; }
-.sw.m0 { background: var(--m0); } .sw.m1 { background: var(--m1); } .sw.m2 { background: var(--m2); } .sw.m3 { background: var(--m3); }
+.sw.m0 { background: var(--m0); } .sw.m1 { background: var(--m1); } .sw.m2 { background: var(--m2); } .sw.m3 { background: var(--m3); } .sw.m4 { background: var(--m4); }
 .now { font-size: 13px; min-width: 0; }
 .now .step { font-weight: 800; }
 .now .need { color: var(--need); font-weight: 850; }
@@ -316,7 +316,7 @@ footer b { font-weight: 800; }
 #drill .st { font-size: 11px; font-weight: 800; }
 #drill .st.failed, #drill .st.interrupted { color: var(--need); } #drill .st.completed { color: var(--good); } #drill .st.running, #drill .st.waiting { color: var(--accent-ink); }
 #drill .tl { width: 100%; height: auto; display: block; overflow: visible; }
-#drill .tl .m0 { fill: var(--m0); } #drill .tl .m1 { fill: var(--m1); } #drill .tl .m2 { fill: var(--m2); } #drill .tl .m3 { fill: var(--m3); }
+#drill .tl .m0 { fill: var(--m0); } #drill .tl .m1 { fill: var(--m1); } #drill .tl .m2 { fill: var(--m2); } #drill .tl .m3 { fill: var(--m3); } #drill .tl .m4 { fill: var(--m4); }
 #drill .tl .axis { stroke: var(--border); stroke-width: 2; }
 #drill .tl text { fill: var(--muted); font-size: 10px; font-family: inherit; }
 #drill .tl .hit { fill: transparent; } #drill .tl .hit:hover { fill: var(--rule); }
@@ -476,8 +476,9 @@ function hhmmss(ms) { const d = local(ms); return hhmm(ms) + ":" + String(d.getU
 const WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function dayParts(label) { const [y, m, d] = label.split("-").map(Number); const dt = new Date(Date.UTC(y, m - 1, d)); return { wd: WEEK[dt.getUTCDay()], short: WEEK[dt.getUTCDay()].slice(0, 3) + " " + d + " " + MON[m - 1] }; }
-function family(model) { model = model || ""; return model.includes("opus") ? 0 : model.includes("sonnet") ? 1 : model.includes("haiku") ? 2 : 3; }
-const FAM = ["Opus", "Sonnet", "Haiku", "Other"];
+function family(model) { model = model || ""; return model.includes("opus") ? 0 : model.includes("sonnet") ? 1 : model.includes("haiku") ? 2 : /^(gpt|o\d|codex)/.test(model) ? 4 : 3; }
+// Family 4 (GPT, from Codex) has no list price here: tokens only, never in the 5-hour plate.
+const FAM = ["Opus", "Sonnet", "Haiku", "Other", "GPT"];
 function modelName(m) {
   if (!m) return "Unknown";
   const x = m.replace(/^claude-/, "").replace(/\[.*\]$/, "");
@@ -540,7 +541,7 @@ function pixelWordmark(text) {
     <g>${body(1, 1, "var(--w-shadow)")}</g><g>${body(0, 0, "url(#wm)")}</g></svg>`;
 }
 $("wordmark").innerHTML = pixelWordmark("WHO ATE MY TOKENS?");
-const APPS = { t3: "T3", t3code: "T3 Code", desktop: "Claude Desktop", cli: "Claude CLI", sdk: "SDK", notetaker: "Note-taker", other: "Other" };
+const APPS = { t3: "T3", t3code: "T3 Code", desktop: "Claude Desktop", cli: "Claude CLI", sdk: "SDK", notetaker: "Note-taker", codex: "Codex", other: "Other" };
 const EP = { "t3-code": "T3 Code", "claude-desktop": "Claude Desktop", cli: "Claude CLI", "sdk-ts": "SDK" };
 const tokTotal = (t) => (t ? t.reduce((a, b) => a + b, 0) : 0);
 
@@ -872,6 +873,15 @@ function renderWindow() {
     </dl>`;
   }
   h += `<p class="fine">Estimated from Claude Code and T3 activity on this Mac, weighting each model by its list price. Chat on claude.ai and other devices also count toward the limit but are not visible here.</p>`;
+  // Codex keeps its own meter, read from its session files. Not part of this plate.
+  const cl = L.codex_limit;
+  if (cl && cl.resets_ms > now()) {
+    const m = cl.win_min, win = m === 10080 ? "weekly" : m === 43200 ? "monthly" : m % 1440 === 0 ? `${m / 1440}-day` : m % 60 === 0 ? `${m / 60}-hour` : `${m}-minute`;
+    const left = cl.resets_ms - now();
+    const when = left < 20 * 3600e3 ? hhmm(cl.resets_ms) : dayParts(new Date(cl.resets_ms + off() * 60000).toISOString().slice(0, 10)).short;
+    const pct = cl.pct < 10 && cl.pct > 0 ? cl.pct.toFixed(1) : Math.round(cl.pct);
+    h += `<p class="fine codexline" data-tip="Codex's own number, read from its session files at ${hhmm(cl.ts)}. It does not count toward the Claude plate above.">Codex says: ${pct}% of its ${win} limit used, resets ${when}.</p>`;
+  }
   el.innerHTML = h;
 }
 
@@ -1081,8 +1091,8 @@ function renderDays(force) {
   const days = D.days;
   const names = days.map((d, i) => ["Today", "Yesterday"][i] || dayParts(d.day).wd);
   const maxW = Math.max(1e-9, ...days.flatMap((d) => d.hours.map((c) => c.reduce((a, b) => a + b, 0))));
-  const famsOf = (d) => { const f = [0, 0, 0, 0]; for (const [m, u] of Object.entries(d.models)) f[family(m)] += u.w; return f; };
-  const allFams = [0, 1, 2, 3].filter((f) => days.some((d) => famsOf(d)[f] > 0));
+  const famsOf = (d) => { const f = [0, 0, 0, 0, 0]; for (const [m, u] of Object.entries(d.models)) f[family(m)] += u.w; return f; };
+  const allFams = [0, 1, 2, 3, 4].filter((f) => days.some((d) => famsOf(d)[f] > 0));
   $("daysLegend").innerHTML = allFams.map((f) => `<span>${sw(f)}${FAM[f]}</span>`).join("");
 
   let h = "";
@@ -1146,18 +1156,22 @@ function renderDays(force) {
     if (!d.sources.length) return col + `<p class="daynone">nobody ate a thing</p></div>`;
     const fw = famsOf(d).reduce((a, b) => a + b, 0) || 1;
     const maxS = Math.max(...d.sources.map((s) => s.total.w)) || 1;
-    col += `<ol class="list">` + d.sources.slice(0, 7).map((s, rank) => {
+    // Codex rows have no weight (no GPT prices here), so they come after the
+    // weighted ones, show tokens only, and read "n/a" for a share.
+    const shown = [...d.sources.filter((s) => s.total.w > 0).slice(0, 7), ...d.sources.filter((s) => !(s.total.w > 0)).slice(0, 2)];
+    col += `<ol class="list">` + shown.map((s, rank) => {
       const ctx = s.app === "t3" ? (s.up ? "under " + s.up : s.project || "T3") : (APPS[s.app] || s.app) + (s.project && s.project !== s.label ? ", " + s.project : "");
-      const tipTxt = `<b>${s.label}</b><br>${full(s.total.t[1])} output tokens, ${full(s.total.n)} requests${s.sub.n ? "<br>" + Math.round((s.sub.w / s.total.w) * 100) + "% by subagents" : ""}${s.sessions > 1 ? "<br>" + s.sessions + " sessions" : ""}`;
+      const tipTxt = `<b>${s.label}</b><br>${full(s.total.t[1])} output tokens, ${full(s.total.n)} requests${s.sub.n && s.total.w ? "<br>" + Math.round((s.sub.w / s.total.w) * 100) + "% by subagents" : ""}${s.sessions > 1 ? "<br>" + s.sessions + " sessions" : ""}`;
       // The bar takes the colour of the model that did most of the eating.
-      const fams = [0, 0, 0, 0];
+      const fams = [0, 0, 0, 0, 0];
       for (const [m, u] of Object.entries(s.models)) fams[family(m)] += u.w;
-      const top = fams.indexOf(Math.max(...fams));
+      const top = Math.max(...fams) > 0 ? fams.indexOf(Math.max(...fams)) : family(Object.keys(s.models)[0]);
       const suspect = rank === 0 && d.sources.length > 1 ? '<span class="prime">prime suspect</span>' : "";
       const open = s.thread ? ` data-thread="${esc(s.thread)}" tabindex="0"` : "";
-      return `<li data-tip="${esc(tipTxt)}"${open}><div class="lbl"><div class="nm"><em>${esc(s.label)}</em>${suspect}</div><small>${esc(ctx)}</small><div class="bar"><i style="width:${(s.total.w / maxS) * 100}%;background:var(--m${top})"></i></div></div><div class="v num">${Math.round((s.total.w / fw) * 100)}%<br>${compact(s.total.t[1])} out</div></li>`;
+      return `<li data-tip="${esc(tipTxt)}"${open}><div class="lbl"><div class="nm"><em>${esc(s.label)}</em>${suspect}</div><small>${esc(ctx)}</small><div class="bar"><i style="width:${(s.total.w / maxS) * 100}%;background:var(--m${top})"></i></div></div><div class="v num">${s.total.w > 0 ? Math.round((s.total.w / fw) * 100) + "%" : '<span data-tip="Codex has no list price here, so it gets no share of the weighted total">n/a</span>'}<br>${compact(s.total.t[1])} out</div></li>`;
     }).join("") + "</ol>";
-    if (d.sources.length > 7 || d.sources_more) col += `<p class="fine">${d.sources.length - 7 + d.sources_more > 0 ? d.sources.length - 7 + d.sources_more + " more on the bill" : ""}</p>`;
+    const hidden = d.sources.length - shown.length + d.sources_more;
+    if (hidden > 0) col += `<p class="fine">${hidden} more on the bill</p>`;
     return col + "</div>";
   }).join("") + "</div>";
 
@@ -1189,13 +1203,14 @@ function renderLedger() {
   if (!d || !d.total.n) { $("ledger").innerHTML = `<p class="muted">Nothing on the bill for this day.</p>`; return; }
   const totalW = d.total.w || 1;
   const hit = (t) => { const inAll = t[0] + t[2] + t[3] + t[4]; return inAll ? Math.round((t[2] / inAll) * 100) + "%" : ""; };
-  const row = (label, u, extra) => `<tr><td>${label}${extra || ""}</td><td>${full(u.n)}</td><td>${compact(u.t[0])}</td><td>${compact(u.t[2])}</td><td>${compact(u.t[3] + u.t[4])}</td><td>${compact(u.t[1])}</td><td>${hit(u.t)}</td><td>${Math.round((u.w / totalW) * 100)}%</td></tr>`;
+  const row = (label, u, extra) => `<tr><td>${label}${extra || ""}</td><td>${full(u.n)}</td><td>${compact(u.t[0])}</td><td>${compact(u.t[2])}</td><td>${compact(u.t[3] + u.t[4])}</td><td>${compact(u.t[1])}</td><td>${hit(u.t)}</td><td>${u.w > 0 || !u.n ? Math.round((u.w / totalW) * 100) + "%" : '<span data-tip="Codex has no list price here, so no share">n/a</span>'}</td></tr>`;
   const head = `<thead><tr><th></th><th>Requests</th><th>Input</th><th>Cache read</th><th>Cache write</th><th>Output</th><th>Cache hits</th><th data-tip="Share of the day's usage, weighting each model by its list price">Share</th></tr></thead>`;
   const models = Object.entries(d.models).sort((a, b) => b[1].w - a[1].w);
   let h = `<div class="tablewrap"><table>${head}<tbody>` + models.map(([m, u]) => row(chip(m), u)).join("") + `</tbody><tfoot>${row("Total", d.total)}</tfoot></table></div>`;
   h += `<h3>itemised, by thread and session</h3><div class="tablewrap"><table>${head.replace("<th></th>", "<th>Where</th>")}<tbody>` +
     d.sources.map((s) => row(esc(s.label), s.total, `<span class="apptag">${esc(APPS[s.app] || s.app)}</span>` + (s.cold && s.cold.n ? `<span class="apptag cold" data-tip="${esc(COLD_TIP)}">${s.cold.n} cold restart${s.cold.n === 1 ? "" : "s"}, ${compact(s.cold.tok)} rebuilt</span>` : ""))).join("") + `</tbody></table></div>` +
     (d.sources_more ? `<p class="fine">${d.sources_more} smaller sources are not listed.</p>` : "") +
+    (models.some(([m]) => family(m) === 4) ? `<p class="fine">Codex rows count tokens only: no GPT prices are assumed, so they get no share, and Codex does not count toward Claude's limit.</p>` : "") +
     '<p class="norefunds">no refunds.</p>';
   $("ledger").innerHTML = h;
 }

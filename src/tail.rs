@@ -15,13 +15,13 @@ use crate::agg::{Agg, UsageIn};
 use crate::timeutil::{day_of, MS_PER_MIN};
 use crate::transcript::{parse_line, LineKind};
 
-const CHUNK: usize = 256 * 1024;
-const KEEP_BUF: usize = 512 * 1024;
+pub(crate) const CHUNK: usize = 256 * 1024;
+pub(crate) const KEEP_BUF: usize = 512 * 1024;
 /// Lines longer than this are skipped without being held in memory. Usage
 /// lines are model output, which the output limit keeps far below this;
 /// only huge tool results (screenshots, file dumps) get this long.
-const MAX_LINE: usize = 8 * 1024 * 1024;
-const HOT_MS: i64 = 15 * MS_PER_MIN;
+pub(crate) const MAX_LINE: usize = 8 * 1024 * 1024;
+pub(crate) const HOT_MS: i64 = 15 * MS_PER_MIN;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FileRec {
@@ -106,7 +106,7 @@ fn classify(root: &Path, path: &Path) -> Option<(String, bool, bool)> {
     }
 }
 
-fn mtime_ms(m: &fs::Metadata) -> i64 {
+pub(crate) fn mtime_ms(m: &fs::Metadata) -> i64 {
     m.modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -115,14 +115,14 @@ fn mtime_ms(m: &fs::Metadata) -> i64 {
 }
 
 #[cfg(unix)]
-fn ino(m: &fs::Metadata) -> u64 {
+pub(crate) fn ino(m: &fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
     m.ino()
 }
 
 /// Ask the OS not to keep what we read in its page cache: a backfill must not
 /// push the user's apps out of memory.
-fn no_cache(f: &File) {
+pub(crate) fn no_cache(f: &File) {
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::io::AsRawFd;
@@ -135,7 +135,7 @@ fn no_cache(f: &File) {
     let _ = f;
 }
 
-fn drop_cache(f: &File) {
+pub(crate) fn drop_cache(f: &File) {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::io::AsRawFd;
@@ -495,6 +495,7 @@ impl Tailer {
                         fast: l.fast,
                         msg_id: l.msg_id.as_deref(),
                         prev_ms: t.rec.prev,
+                        codex: false,
                     },
                     self.off,
                 );

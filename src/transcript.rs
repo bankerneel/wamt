@@ -171,7 +171,7 @@ struct RawLine<'a> {
 /// Accepts the expected type or silently ignores anything else, so one
 /// unexpected field shape never drops the whole line.
 #[derive(Debug)]
-enum Lenient<T> {
+pub(crate) enum Lenient<T> {
     Ok(T),
     Other,
 }
@@ -193,7 +193,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Lenient<T> {
 }
 
 impl<T> Lenient<T> {
-    fn get(self) -> Option<T> {
+    pub(crate) fn get(self) -> Option<T> {
         match self {
             Lenient::Ok(v) => Some(v),
             Lenient::Other => None,

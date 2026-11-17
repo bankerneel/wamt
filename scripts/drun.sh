@@ -1,6 +1,8 @@
 #!/bin/sh
 # Run the Linux build inside a container against the real data, read-only.
-# Private T3 folders are hidden behind empty mounts. Page: http://127.0.0.1:7318
+# Private T3 folders are hidden behind empty mounts. Codex: only ~/.codex/sessions
+# and ~/.codex/archived_sessions are mounted (never ~/.codex itself, which holds
+# auth files). Page: http://127.0.0.1:7318
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p .state-docker
@@ -15,12 +17,15 @@ exec docker run -d --name sb-test --network sb-net --memory 256m --cpus 1 \
   --mount type=tmpfs,destination=/data/t3/device,tmpfs-size=1k \
   -v /dev/null:/data/t3/shell-environment-cache.json:ro \
   -v "$HOME/.claude/projects":/data/claude:ro \
+  -v "${WAMT_CODEX_SRC:-$HOME/.codex/sessions}":/data/codex/sessions:ro \
+  -v "$HOME/.codex/archived_sessions":/data/codex/archived_sessions:ro \
   -v sb-target:/target:ro \
   -v "$PWD/.state-docker":/state \
   -v "$PWD/ui":/ui:ro \
   -e WAMT_BIND=0.0.0.0:7317 \
   -e WAMT_T3_DB=/data/t3/statev2.sqlite \
   -e WAMT_CLAUDE_ROOT=/data/claude \
+  -e WAMT_CODEX_ROOT=/data/codex/sessions \
   -e WAMT_STATE=/state \
   -e WAMT_UTC_OFFSET_MIN=330 \
   -e WAMT_UI=/ui/index.html \

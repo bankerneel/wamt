@@ -2,6 +2,7 @@
 //! and Claude Code usage. Read-only on its sources; binds to 127.0.0.1.
 
 mod agg;
+mod codex;
 mod drill;
 mod feed;
 mod http;
@@ -44,6 +45,7 @@ struct Config {
     bind: String,
     t3_db: PathBuf,
     claude_root: PathBuf,
+    codex_root: PathBuf,
     state_dir: PathBuf,
     ui: Option<PathBuf>,
     extra_hosts: Vec<String>,
@@ -60,6 +62,7 @@ fn config() -> Config {
         bind: env_or("WAMT_BIND", "127.0.0.1:7317"),
         t3_db: env_or("WAMT_T3_DB", format!("{home}/.t3/userdata/statev2.sqlite")).into(),
         claude_root: env_or("WAMT_CLAUDE_ROOT", format!("{home}/.claude/projects")).into(),
+        codex_root: env_or("WAMT_CODEX_ROOT", format!("{home}/.codex/sessions")).into(),
         state_dir: env_or("WAMT_STATE", ".state").into(),
         ui: std::env::var("WAMT_UI").ok().filter(|v| !v.is_empty()).map(PathBuf::from),
         extra_hosts: env_or("WAMT_ALLOW_HOSTS", "")
@@ -408,7 +411,22 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
 
 // ------------------------------------------------------- transcript worker
 
-fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hub: Arc<Hub>) {
+/// Adds a Codex day to a Claude day. Session ids never collide, and Codex
+/// has no hourly or active-time data, so only models, sessions and subagent
+/// counts are merged.
+fn merge_codex_day(into: &mut DayAgg, cx: &DayAgg) {
+    for (m, u) in &cx.models {
+        into.models.entry(m.clone()).or_default().merge(u);
+    }
+    for (sid, s) in &cx.sessions {
+        into.sessions.insert(sid.clone(), s.clone());
+    }
+    for (p, m) in &cx.subs {
+        into.subs.entry(p.clone()).or_default().extend(m.clone());
+    }
+}
+
+fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hub: Arc<Hub>) {
     let cache_path = state_dir.join("transcripts.json");
     let off = shared.lock().unwrap().off;
     let mut t = tail::Tailer::new(root.clone(), off);
@@ -419,6 +437,17 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
             log("transcript cache ignored (version or time zone changed)");
         }
     }
+    // Codex is optional: with no folder the feature is silently off.
+    let codex_path = state_dir.join("codex.json");
+    let mut cx = codex_root.is_dir().then(|| codex::CodexTail::new(codex_root.clone(), off));
+    if let Some(c) = cx.as_mut() {
+        if let Some(cache) = state::load::<codex::CodexCache>(&codex_path) {
+            if c.restore(cache) {
+                log("codex cache restored; reading only new bytes");
+            }
+        }
+    }
+    let mut cx_saved = now_ms();
     let mut today = day_of(now_ms(), off);
     let (mut last_full, mut last_pub, mut last_save, mut last_prune) = (0i64, 0i64, now_ms(), 0i64);
     let mut last_tracked = 0i64;
@@ -437,12 +466,17 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
             }
             t.agg.prune(day - 2, now, off);
             t.prune_sessions(window_start);
+            if let Some(c) = cx.as_mut() {
+                c.prune(day, window_start, now);
+            }
             last_prune = now;
         }
         let t0 = std::time::Instant::now();
         // Hot files every second, tracked files and folders every 5 s, and a
         // full sweep (which also catches resumed old sessions) every minute.
+        let mut tier = 0u8;
         let changed = if now - last_full >= 60_000 {
+            tier = 2;
             last_full = now;
             last_tracked = now;
             let c = t.full_scan(window_start, now);
@@ -453,11 +487,20 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
             }
             c
         } else if now - last_tracked >= 5000 {
+            tier = 1;
             last_tracked = now;
             t.poll_tracked(window_start, now)
         } else {
             t.poll_hot(window_start, now)
         };
+        let mut changed = changed;
+        if let Some(c) = cx.as_mut() {
+            changed |= match tier {
+                2 => c.full_scan(window_start, now),
+                1 => c.poll_tracked(window_start, now),
+                _ => c.poll_hot(window_start, now),
+            };
+        }
         if first {
             log(format!(
                 "transcripts ready in {} ms: {} files tracked, {} MB read",
@@ -473,8 +516,13 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
             if changed || force {
                 let mut v: Vec<(i32, DayAgg)> = Vec::with_capacity(3);
                 for d in [day, day - 1, day - 2] {
-                    if let Some(a) = t.agg.days.get(&d) {
-                        v.push((d, a.clone()));
+                    let mut a = t.agg.days.get(&d).cloned();
+                    // Codex joins the day's totals and lists (weight 0).
+                    if let Some(cd) = cx.as_ref().and_then(|c| c.agg.days.get(&d)) {
+                        merge_codex_day(a.get_or_insert_with(DayAgg::default), cd);
+                    }
+                    if let Some(a) = a {
+                        v.push((d, a));
                     }
                 }
                 days_arc = Arc::new(v);
@@ -497,6 +545,7 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
             let sessions: HashMap<String, tail::SessionInfo> = t
                 .sessions
                 .iter()
+                .chain(cx.iter().flat_map(|c| c.sessions.iter()))
                 .filter(|(_, s)| s.last >= window_start)
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
@@ -513,6 +562,7 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
                 sh.tx.spark_obs = spark_obs;
                 sh.tx.stats = t.stats.clone();
                 sh.tx.hits = t.agg.hits.clone();
+                sh.tx.codex_limit = cx.as_ref().and_then(|c| c.limit.clone());
                 sh.tx.ready = true;
                 let mapped: HashSet<String> = sh.t3.as_ref().map(|p| p.sessions.keys().cloned().collect()).unwrap_or_default();
                 if !first {
@@ -552,6 +602,15 @@ fn tail_worker(root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hu
                 Err(e) => log(format!("cache save failed: {e}")),
             }
         }
+        if let Some(c) = cx.as_mut() {
+            if c.agg.dirty && now - cx_saved >= 60_000 {
+                cx_saved = now;
+                match state::save(&codex_path, &c.to_cache()) {
+                    Ok(_) => c.agg.dirty = false,
+                    Err(e) => log(format!("codex cache save failed: {e}")),
+                }
+            }
+        }
         first = false;
         thread::sleep(Duration::from_millis(1000));
     }
@@ -585,7 +644,8 @@ fn main() {
     }
     {
         let (s, h, root, sd) = (shared.clone(), hub.clone(), cfg.claude_root.clone(), cfg.state_dir.clone());
-        thread::Builder::new().name("tail".into()).stack_size(1 << 20).spawn(move || tail_worker(root, sd, s, h)).unwrap();
+        let cx = cfg.codex_root.clone();
+        thread::Builder::new().name("tail".into()).stack_size(1 << 20).spawn(move || tail_worker(root, cx, sd, s, h)).unwrap();
     }
     let ui = match cfg.ui {
         Some(p) => http::Ui::Disk(p),

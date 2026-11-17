@@ -27,6 +27,7 @@ nothing, because the next start reads only what changed since.
 |---|---|
 | `~/.t3/userdata/statev2.sqlite` | SQLite opened with `mode=ro`, 2 MB page cache, short read transactions |
 | `~/.claude/projects/**/*.jsonl` | Read-only, only new bytes after the first pass, without filling the page cache |
+| `~/.codex/sessions/` and `~/.codex/archived_sessions/` | Same as above, only the last few days' files; token counts and model names only. Nothing else in `~/.codex` is read |
 
 - Never writes to, locks, or copies either source. Never reads
   `~/.t3/userdata/secrets` or any other T3 file.

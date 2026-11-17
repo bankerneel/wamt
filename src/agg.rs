@@ -220,6 +220,9 @@ pub struct UsageIn<'a> {
     pub msg_id: Option<&'a str>,
     /// Previous request time in the same transcript file (0 = none seen).
     pub prev_ms: i64,
+    /// A Codex response: weight 0, and kept out of the Claude minute cells,
+    /// hourly strip and active time (Codex does not count toward Claude's limit).
+    pub codex: bool,
 }
 
 impl Agg {
@@ -233,15 +236,17 @@ impl Agg {
             }
             self.seen.insert(h, day);
         }
-        let w = weight(u.model, u.tokens, u.fast);
+        let w = if u.codex { 0.0 } else { weight(u.model, u.tokens, u.fast) };
         let fam = family(u.model);
         let d = self.days.entry(day).or_default();
         d.models.entry(u.model.to_string()).or_default().add(u.tokens, w);
-        let hr = hour_of(u.ts_ms, off);
-        d.hours[hr][fam] += w;
-        d.hours_n[hr] += 1;
-        let slot = ((u.ts_ms - day_start_ms(day, off)) / (5 * MS_PER_MIN)).clamp(0, 287) as usize;
-        d.active[slot / 64] |= 1u64 << (slot % 64);
+        if !u.codex {
+            let hr = hour_of(u.ts_ms, off);
+            d.hours[hr][fam] += w;
+            d.hours_n[hr] += 1;
+            let slot = ((u.ts_ms - day_start_ms(day, off)) / (5 * MS_PER_MIN)).clamp(0, 287) as usize;
+            d.active[slot / 64] |= 1u64 << (slot % 64);
+        }
         let s = d.sessions.entry(u.session.to_string()).or_default();
         s.models.entry(u.model.to_string()).or_default().add(u.tokens, w);
         if u.sub {
@@ -264,11 +269,13 @@ impl Agg {
             s.first = u.ts_ms;
         }
         s.last = s.last.max(u.ts_ms);
-        let m = self.mins.entry(u.ts_ms.div_euclid(MS_PER_MIN)).or_default();
-        m.w[fam] += w;
-        m.n += 1;
-        if u.observer {
-            m.o += w;
+        if !u.codex {
+            let m = self.mins.entry(u.ts_ms.div_euclid(MS_PER_MIN)).or_default();
+            m.w[fam] += w;
+            m.n += 1;
+            if u.observer {
+                m.o += w;
+            }
         }
         self.dirty = true;
         true
@@ -544,6 +551,7 @@ mod tests {
                 fast: false,
                 msg_id: Some(id),
                 prev_ms: 0,
+                codex: false,
             },
             OFF,
         )
@@ -583,6 +591,7 @@ mod tests {
             fast: false,
             msg_id: Some(id),
             prev_ms: prev,
+            codex: false,
         };
         static T: Tokens = Tokens { input: 0, output: 5, cache_read: 0, cache_w5m: 80_000, cache_w1h: 0 };
         let prev = parse_ts_ms("2026-11-17T10:00:00Z").unwrap();
@@ -599,7 +608,7 @@ mod tests {
     fn at(a: &mut Agg, ts_ms: i64, model: &str, out: u64, id: &str) {
         let t = Tokens { output: out, ..Default::default() };
         a.add_usage(
-            UsageIn { session: "s1", sub: false, observer: false, ts_ms, model, tokens: &t, fast: false, msg_id: Some(id), prev_ms: 0 },
+            UsageIn { session: "s1", sub: false, observer: false, ts_ms, model, tokens: &t, fast: false, msg_id: Some(id), prev_ms: 0, codex: false },
             OFF,
         );
     }

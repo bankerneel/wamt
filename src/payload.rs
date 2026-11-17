@@ -40,6 +40,8 @@ pub struct TxPart {
     pub stats: TailStats,
     /// Limit hits (deduped) inside the 3-day window.
     pub hits: Vec<i64>,
+    /// Codex's own limit meter (the latest seen).
+    pub codex_limit: Option<crate::codex::CodexLimit>,
     pub ready: bool,
 }
 
@@ -96,6 +98,8 @@ pub enum App {
     Cli,
     Sdk,
     Notetaker,
+    /// A Codex session T3 does not know (the ones it knows count as T3).
+    Codex,
     Other,
 }
 
@@ -108,6 +112,7 @@ fn app_of(session: &str, info: Option<&SessionInfo>, map: &HashMap<String, Strin
         return App::Notetaker;
     }
     match i.ep.as_deref() {
+        Some(crate::codex::EP) => App::Codex,
         Some("t3-code") => App::T3code,
         Some("claude-desktop") => App::Desktop,
         Some("cli") => App::Cli,
@@ -237,6 +242,8 @@ struct Live<'a> {
     subs: Vec<&'a Subagent>,
     outside: Vec<OutsideOut>,
     notetaker: Option<NotetakerOut>,
+    /// Codex's own limit meter, when Codex is read and has reported one.
+    codex_limit: Option<&'a crate::codex::CodexLimit>,
 }
 
 #[derive(Serialize)]
@@ -501,6 +508,7 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
         subs,
         outside,
         notetaker: note,
+        codex_limit: sh.tx.codex_limit.as_ref(),
     };
     serde_json::to_string(&live).unwrap_or_else(|_| "{}".into())
 }
@@ -599,6 +607,7 @@ fn app_key(a: App) -> &'static str {
         App::Cli => "cli",
         App::Sdk => "sdk",
         App::Notetaker => "notetaker",
+        App::Codex => "codex",
         App::Other => "other",
     }
 }
@@ -674,9 +683,16 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
             e.last = e.last.max(s.last);
         }
         let mut sources: Vec<SourceOut> = src.into_values().collect();
-        sources.sort_by(|a, b| b.total.w.partial_cmp(&a.total.w).unwrap_or(std::cmp::Ordering::Equal));
-        let more = sources.len().saturating_sub(16);
-        sources.truncate(16);
+        sources.sort_by(|a, b| {
+            b.total.w.partial_cmp(&a.total.w).unwrap_or(std::cmp::Ordering::Equal).then(b.total.t.output.cmp(&a.total.t.output))
+        });
+        // Rows with no weight (Codex) sort last; keep the biggest two so
+        // a busy Claude day cannot push them off the list.
+        let (mut sources, unweighted): (Vec<SourceOut>, Vec<SourceOut>) = sources.into_iter().partition(|s| s.total.w > 0.0);
+        let total_sources = sources.len() + unweighted.len();
+        sources.truncate(14);
+        sources.extend(unweighted.into_iter().take(if sources.len() < 14 { 16 - sources.len() } else { 2 }));
+        let more = total_sources - sources.len();
 
         // T3 runs, subagents, PRs for the day.
         let mut td = T3Day::default();
