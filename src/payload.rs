@@ -226,6 +226,10 @@ struct ThreadOut<'a> {
     archived: bool,
     prs: usize,
     pr: Option<&'a Pr>,
+    /// Weighted usage in roughly the last 30 minutes (today's 10-minute
+    /// buckets that overlap it), for the runaway alert.
+    #[serde(skip_serializing_if = "is_zero")]
+    eat30: f64,
     run: Option<&'a ActiveRun>,
     ctx: Option<&'a Ctx>,
     waiting: Option<&'a Waiting>,
@@ -320,6 +324,30 @@ struct SparkOut<'a> {
     obs: &'a [f64],
 }
 
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// Weight per thread in the 10-minute buckets overlapping the last 30 minutes.
+fn recent_by_thread(day: Option<&DayAgg>, map: &HashMap<String, String>, day_start: i64, now: i64) -> HashMap<String, f64> {
+    let mut out: HashMap<String, f64> = HashMap::new();
+    let Some(d) = day else { return out };
+    let from = now - 30 * MS_PER_MIN;
+    for (sid, s) in &d.sessions {
+        let Some(th) = map.get(sid) else { continue };
+        let w: f64 = s
+            .buckets
+            .iter()
+            .filter(|(slot, _)| day_start + (**slot as i64 + 1) * 10 * MS_PER_MIN > from)
+            .map(|(_, b)| b.w.iter().sum::<f64>())
+            .sum();
+        if w > 0.0 {
+            *out.entry(th.clone()).or_default() += w;
+        }
+    }
+    out
+}
+
 fn today_by_thread(day: Option<&DayAgg>, map: &HashMap<String, String>) -> HashMap<String, Use> {
     let mut out: HashMap<String, Use> = HashMap::new();
     if let Some(d) = day {
@@ -348,6 +376,7 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
     let smap = t3.map(|t| t.sessions.as_ref()).unwrap_or(&empty_map);
     let tday = sh.tx.days.iter().find(|(d, _)| *d == today).map(|(_, a)| a);
     let by_thread = today_by_thread(tday, smap);
+    let recent = recent_by_thread(tday, smap, day_start_ms(today, off), now);
 
     // Last request per thread, from transcript sessions.
     let mut last_req: HashMap<&str, i64> = HashMap::new();
@@ -430,6 +459,7 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
             ctx: t3.and_then(|x| x.ctx.get(&t.id)),
             waiting: waiting_by_thread.get(t.id.as_str()).copied(),
             today: by_thread.get(&t.id).cloned(),
+            eat30: recent.get(&t.id).copied().unwrap_or(0.0),
             last_req: last_req.get(t.id.as_str()).copied().unwrap_or(0),
         })
         .collect();
@@ -898,6 +928,22 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_by_thread_counts_buckets_overlapping_30_minutes() {
+        use crate::agg::{Bucket, SessionDay};
+        let mut d = DayAgg::default();
+        let mut sd = SessionDay::default();
+        // Slots are 10 minutes from the local day start (0 here).
+        for (slot, w) in [(0u16, 1.0), (3, 2.0), (4, 4.0), (5, 8.0)] {
+            sd.buckets.insert(slot, Bucket { w: [w, 0.0, 0.0, 0.0], out: 0 });
+        }
+        d.sessions.insert("s1".into(), sd);
+        let map: HashMap<String, String> = [("s1".to_string(), "th".to_string())].into();
+        // Now 00:55: the last 30 minutes start 00:25, so slots 2 (00:20) to 5 count.
+        let r = recent_by_thread(Some(&d), &map, 0, 55 * MS_PER_MIN);
+        assert_eq!(r["th"], 14.0);
+    }
     use crate::agg::{Agg, UsageIn, WEEK_DAYS};
     use crate::timeutil::now_ms;
     use crate::transcript::Tokens;

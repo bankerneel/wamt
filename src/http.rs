@@ -172,6 +172,7 @@ impl Server {
                 let _ = respond(&mut s, "200 OK", "text/html; charset=utf-8", &page, head);
             }
             "/api/state" => {
+                self.refresh_if_stale();
                 let (snap, _) = self.hub.snapshot();
                 let _ = respond(&mut s, "200 OK", "application/json", snap.as_bytes(), head);
             }
@@ -215,11 +216,28 @@ impl Server {
         }
     }
 
+    /// Rebuilds the live and days JSON if the workers skipped it while
+    /// nobody was connected.
+    fn refresh_if_stale(&self) {
+        if !self.hub.take_stale() {
+            return;
+        }
+        let now = now_ms();
+        let (live, days) = {
+            let mut sh = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+            (crate::payload::compose_live(&mut sh, now), crate::payload::compose_days(&sh, now))
+        };
+        self.hub.set_live(live);
+        self.hub.set_days(days);
+    }
+
     fn sse(&self, mut s: TcpStream) {
         let hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\nX-Content-Type-Options: nosniff\r\n\r\nretry: 1500\n\n";
         if s.write_all(hdr.as_bytes()).is_err() {
             return;
         }
+        let _client = self.hub.client();
+        self.refresh_if_stale();
         let (snap, mut seen): (String, Seen) = self.hub.snapshot();
         if write_event(&mut s, "hello", &snap).is_err() {
             return;

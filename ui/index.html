@@ -716,6 +716,7 @@ function threadRow(n, depth, trail, last, L) {
   const subBits = [];
   if (n.sub) subBits.push(n.sub.origin === "provider_native" ? "built-in subagent" : "subagent");
   else if (depth === 0 && t.source === "web") subBits.push("started by you");
+  { const pw = plateOf(L); const share = pw && pw.cap && t.eat30 ? t.eat30 / pw.cap.used : 0; if (share >= 0.25) subBits.unshift(`binging: ${Math.round(share * 100)}% of the plate in 30 min`); }
   if (t.project) subBits.push(t.project);
   if (t.branch) subBits.push(t.branch);
   if (t.prs) {
@@ -1315,11 +1316,17 @@ function renderDays(force) {
 
   // Pull requests linked in the three days, one line per PR.
   const prs = dedupePrs(days);
+  // Weight per thread title over these days, and how many PRs each linked.
+  const threadW = new Map(), prsPer = new Map();
+  for (const d of days) for (const src of d.sources || []) if (src.app === "t3" && src.total.w > 0) threadW.set(src.label, (threadW.get(src.label) || 0) + src.total.w);
+  for (const pr of prs) for (const title of pr.threads) prsPer.set(title, (prsPer.get(title) || 0) + 1);
   if (prs.length) {
-    h += `<h3>Pull requests linked</h3><div class="tablewrap"><table><thead><tr><th>PR</th><th style="text-align:left">Title</th><th style="text-align:left">Repository</th><th style="text-align:left">Threads</th><th>State</th><th style="text-align:left">CI and review</th><th>Linked</th></tr></thead><tbody>` +
+    h += `<h3>Pull requests linked</h3><div class="tablewrap"><table><thead><tr><th>PR</th><th style="text-align:left">Title</th><th style="text-align:left">Repository</th><th style="text-align:left">Threads</th><th>State</th><th style="text-align:left">CI and review</th><th data-tip="API-equivalent of the threads that linked this PR over these days, split evenly when a thread linked several PRs. An estimate.">API cost</th><th>Linked</th></tr></thead><tbody>` +
       prs.slice(0, 12).map((pr) => {
+        let cost = 0, known = false;
+        for (const title of pr.threads) { const w = threadW.get(title); if (w != null) { cost += w / (prsPer.get(title) || 1); known = true; } }
         const st = pr.draft ? "draft" : (pr.state || "").toLowerCase();
-        return `<tr><td class="num">#${pr.n}</td><td style="text-align:left;white-space:normal;min-width:240px">${esc(pr.title || "")}</td><td style="text-align:left">${esc(pr.repo.split("/").pop())}</td><td style="text-align:left;max-width:260px;overflow:hidden;text-overflow:ellipsis">${esc([...pr.threads].join(", "))}</td><td><span class="state ${esc(st)}">${esc(st)}</span></td><td style="text-align:left">${prBadges(pr)}</td><td>${esc(names[pr.day])} ${hhmm(pr.linked)}</td></tr>`;
+        return `<tr><td class="num">#${pr.n}</td><td style="text-align:left;white-space:normal;min-width:240px">${esc(pr.title || "")}</td><td style="text-align:left">${esc(pr.repo.split("/").pop())}</td><td style="text-align:left;max-width:260px;overflow:hidden;text-overflow:ellipsis">${esc([...pr.threads].join(", "))}</td><td><span class="state ${esc(st)}">${esc(st)}</span></td><td style="text-align:left">${prBadges(pr)}</td><td class="num">${known ? "$" + (cost / 1e6).toFixed(cost >= 1e8 ? 0 : 2) : '<span class="muted" data-tip="Its threads are too small to be listed in these days">n/a</span>'}</td><td>${esc(names[pr.day])} ${hhmm(pr.linked)}</td></tr>`;
       }).join("") + "</tbody></table></div>" + (prs.length > 12 ? `<p class="fine">and ${prs.length - 12} more</p>` : "");
   }
   $("days").innerHTML = h;
@@ -1524,6 +1531,16 @@ function alerts(L) {
     events.push([`wait:${t.id}:${since}`, "A thread needs you", t.title || "A T3 thread is waiting on you"]);
   }
   if (pct != null && pct >= 0.8) events.push([`p80:${w.start_ms}`, `The plate is ${Math.round(pct * 100)}% eaten`, `Resets at ${hhmm(w.end_ms)}. Estimated from this Mac's usage.`]);
+  if (w && w.active && w.cap) for (const t of L.threads) {
+    const share = (t.eat30 || 0) / w.cap.used;
+    if (share >= 0.25) events.push([`binge:${t.id}:${w.start_ms}`, `${t.title || "A thread"} is binging`, `It ate ${Math.round(share * 100)}% of the 5-hour plate in the last 30 minutes. Check it is not stuck in a loop.`]);
+  }
+  for (const t of L.threads) {
+    if (!t.ctx || !(t.ctx.max > 0)) continue;
+    const p = t.ctx.used / t.ctx.max, k = `ctx85:${t.id}`;
+    if (p >= 0.85) events.push([k, `Context ${Math.round(p * 100)}% full`, `${t.title || "A thread"} is near its context limit; compaction or a fresh thread is close, and every request now resends a lot.`]);
+    else if (p < 0.7) A.seen.delete(k); // after a compaction it can warn again
+  }
   for (const t of waiting) {
     const exp = t.ctx && t.ctx.cache_exp;
     if (exp && exp > now() && exp - now() <= 5 * 60e3) events.push([`cold:${t.id}:${exp}`, "Cache going cold", `${t.title || "A thread"} waits on you; its prompt cache expires at ${hhmm(exp)}. Answer before then to avoid paying to rebuild it.`]);
@@ -1675,16 +1692,25 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ------------------------------------------------------------------ stream
+// While the tab is hidden, keep the data and the alerts (title, favicon,
+// notifications) current but skip drawing; draw once when it is shown again.
+function drawAll() {
+  if (S.live) { renderHeader(); renderReadout(); renderBoard(); renderWindow(); renderSpark(); renderFoot(); tick(); }
+  if (S.days) renderDays(false);
+  renderFeed();
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && S.behind) { S.behind = false; drawAll(); } });
 function onLive(L) {
   S.live = L; S.skew = L.now - Date.now(); S.lastMsg = Date.now();
-  renderHeader(); renderReadout(); renderBoard(); renderWindow(); renderSpark(); renderFoot(); tick();
+  if (document.hidden) S.behind = true;
+  else { renderHeader(); renderReadout(); renderBoard(); renderWindow(); renderSpark(); renderFoot(); tick(); }
   alerts(L);
 }
-function onDays(raw) { S.rawDays = raw; S.days = JSON.parse(raw); renderDays(false); }
+function onDays(raw) { S.rawDays = raw; S.days = JSON.parse(raw); if (document.hidden) S.behind = true; else renderDays(false); }
 function onFeed(items, fresh) {
   for (const f of items) { if (fresh && !S.feed.has(f.id)) S.fresh.add(f.id); S.feed.set(f.id, f); }
   if (S.feed.size > 600) { const sorted = [...S.feed.values()].sort((a, b) => a.ts - b.ts); for (const f of sorted.slice(0, S.feed.size - 600)) S.feed.delete(f.id); }
-  renderFeed();
+  if (document.hidden) S.behind = true; else renderFeed();
 }
 function connect() {
   const params = new URLSearchParams(location.search);

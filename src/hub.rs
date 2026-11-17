@@ -1,6 +1,7 @@
 //! Latest JSON payloads plus a condition variable that wakes SSE clients.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -20,6 +21,19 @@ struct State {
 pub struct Hub {
     st: Mutex<State>,
     cv: Condvar,
+    /// Open event streams. With none, the workers skip building the live
+    /// and days JSON (they only mark it stale) and a new client rebuilds it.
+    clients: AtomicUsize,
+    stale: AtomicBool,
+}
+
+/// Counts one open event stream for as long as it lives.
+pub struct ClientGuard<'a>(&'a Hub);
+
+impl Drop for ClientGuard<'_> {
+    fn drop(&mut self) {
+        self.0.clients.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// Versions a client has already seen.
@@ -46,6 +60,25 @@ impl Hub {
             s.days = Arc::new("{}".into());
         }
         Arc::new(h)
+    }
+
+    pub fn client(&self) -> ClientGuard<'_> {
+        self.clients.fetch_add(1, Ordering::Relaxed);
+        ClientGuard(self)
+    }
+
+    /// True when no event stream is open: building payloads can wait.
+    /// Marks them stale so the next reader rebuilds them first.
+    pub fn idle(&self) -> bool {
+        let idle = self.clients.load(Ordering::Relaxed) == 0;
+        if idle {
+            self.stale.store(true, Ordering::Relaxed);
+        }
+        idle
+    }
+
+    pub fn take_stale(&self) -> bool {
+        self.stale.swap(false, Ordering::Relaxed)
     }
 
     pub fn set_live(&self, json: String) {
@@ -118,6 +151,20 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_marks_stale_until_a_client_connects() {
+        let h = Hub::new();
+        assert!(h.idle());
+        assert!(h.take_stale());
+        assert!(!h.take_stale());
+        {
+            let _g = h.client();
+            assert!(!h.idle());
+            assert!(!h.take_stale());
+        }
+        assert!(h.idle());
+    }
 
     #[test]
     fn feed_upserts_and_wait_returns_changes() {

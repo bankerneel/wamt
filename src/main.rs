@@ -79,6 +79,9 @@ fn log(msg: impl AsRef<str>) {
 }
 
 fn publish_live(shared: &Mutex<Shared>, hub: &Hub) {
+    if hub.idle() {
+        return;
+    }
     let json = {
         let mut sh = shared.lock().unwrap();
         compose_live(&mut sh, now_ms())
@@ -87,6 +90,9 @@ fn publish_live(shared: &Mutex<Shared>, hub: &Hub) {
 }
 
 fn publish_days(shared: &Mutex<Shared>, hub: &Hub, force: bool) {
+    if hub.idle() {
+        return;
+    }
     let now = now_ms();
     let json = {
         let mut sh = shared.lock().unwrap();
