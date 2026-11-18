@@ -74,7 +74,7 @@ health_wait() {
 health_failed() { echo "Health check failed at $URL"; }
 stop_docker() {
   if [ "${started_docker:-0}" -eq 1 ]; then
-    run osascript -e 'tell application "OrbStack" to quit'
+    run orb stop
     started_docker=0
   fi
 }
@@ -95,7 +95,7 @@ update() {
   if [ "$no_docker" -eq 0 ]; then
     if ! docker info >/dev/null 2>&1; then
       echo "Docker not running; starting OrbStack"
-      run open -a OrbStack
+      run orb start
       started_docker=1
       if ! dry; then
         n=0
