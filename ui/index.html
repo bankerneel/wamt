@@ -133,6 +133,7 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .readout { font-size: 17px; line-height: 1.8; color: var(--ink-soft); padding: 16px 20px; }
 .readout .din { font-size: 22px; color: var(--ink); margin: 0 1px; padding-inline: .12em; background-image: linear-gradient(transparent 58%, var(--marker) 58%, var(--marker) 92%, transparent 92%); }
 .readout .live-n { color: var(--ink); font-weight: 800; }
+.readout .pace { color: var(--ink); font-weight: 800; padding-inline: .12em; background-image: linear-gradient(transparent 58%, var(--marker) 58%, var(--marker) 92%, transparent 92%); }
 
 /* Main grid */
 .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(330px, 410px); gap: 30px; align-items: start; }
@@ -296,7 +297,10 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .monthhead h3 { margin: 0; }
 .monthtot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 12px; color: var(--ink-soft); }
 .monthtot .big { font-size: 22px; line-height: 1; color: var(--ink); }
-.monthcols { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 2px; margin-top: 9px; }
+.avgkey { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.avgkey i { display: inline-block; width: 16px; border-top: 2px dashed var(--ink-soft); }
+.monthcols { position: relative; display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 2px; margin-top: 9px; }
+.monthcols .avgline { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed var(--ink-soft); opacity: .7; pointer-events: none; }
 .mcol { min-width: 0; text-align: center; }
 .mcol .mbars { height: 40px; display: flex; flex-direction: column-reverse; justify-content: flex-start; border-bottom: 2px solid var(--border); }
 .mcol .mbars i { display: block; width: 100%; border-top: 1px solid var(--panel); min-height: 1px; }
@@ -623,6 +627,62 @@ const APPS = { t3: "T3", t3code: "T3 Code", desktop: "Claude Desktop", cli: "Cla
 const EP = { "t3-code": "T3 Code", "claude-desktop": "Claude Desktop", cli: "Claude CLI", "sdk-ts": "SDK" };
 const tokTotal = (t) => (t ? t.reduce((a, b) => a + b, 0) : 0);
 
+// ------------------------------------------------------------------ pace math
+// Pure helpers: no state, DOM or clock. tools/pace-check.js lifts this block
+// verbatim and runs it with new Function against a saved /api/state response.
+// ---- pace math ----
+function paceCell(v) {
+  if (Array.isArray(v)) return v.reduce((a, b) => a + (Number(b) || 0), 0);
+  return Number(v) || 0;
+}
+function paceSum(hours) {
+  let s = 0;
+  for (const c of hours || []) s += paceCell(c);
+  return s;
+}
+// Weighted usage from 00:00 up to hourFrac (whole hours plus a slice of the
+// current hour). Hour cells are local, oldest first, 24 per day.
+function paceCumulative(hours, hourFrac) {
+  const h = Math.floor(hourFrac), frac = hourFrac - h;
+  let s = 0;
+  const cells = hours || [];
+  for (let i = 0; i < cells.length; i++) {
+    if (i < h) s += paceCell(cells[i]);
+    else if (i === h) s += paceCell(cells[i]) * frac;
+  }
+  return s;
+}
+function paceMedian(vals) {
+  if (!vals.length) return 0;
+  const a = vals.slice().sort((x, y) => x - y), m = a.length >> 1;
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+function paceHourFrac(ms, offMinutes) {
+  const d = new Date(Number(ms) + (Number(offMinutes) || 0) * 60000);
+  return d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600;
+}
+// The last week entry is today. Compare its usage so far with the median of
+// earlier active days at the same time of day. Null when there is no fair
+// comparison to make (fewer than three earlier active days, or no baseline).
+function paceStats(week, hourFrac) {
+  const W = Array.isArray(week) ? week : [];
+  if (W.length < 2) return null;
+  const prev = W.slice(0, -1).filter((d) => d && d.total && Number(d.total.w) > 0 && Array.isArray(d.hours));
+  const daysUsed = prev.length;
+  if (daysUsed < 3) return null;
+  const normal = paceMedian(prev.map((d) => paceCumulative(d.hours, hourFrac)));
+  if (!(normal > 0)) return null;
+  const today = W[W.length - 1];
+  const soFar = today && Array.isArray(today.hours) ? paceSum(today.hours) : 0;
+  const normalFull = paceMedian(prev.map((d) => Number(d.total.w) || paceSum(d.hours)));
+  return { ratio: soFar / normal, normal, normalFull, today: soFar, daysUsed, day: today ? today.day : "" };
+}
+function paceAverageActive(month) {
+  const active = (Array.isArray(month) ? month : []).filter((m) => m && Number(m.w) > 0);
+  return { avg: active.length ? active.reduce((a, m) => a + Number(m.w), 0) / active.length : 0, count: active.length };
+}
+// ---- end pace math ----
+
 // ------------------------------------------------------------------ tooltip
 const tip = $("tip");
 document.addEventListener("pointermove", (e) => {
@@ -697,7 +757,19 @@ function renderReadout() {
   if (!L.health.tx_ready) { $("readout").textContent = "Reading today's transcripts"; return; }
   const n = (v) => `<span class="din num">${compact(v)}</span>`;
   const parts = [];
-  parts.push(`Today your agents ate ${n(t.output)} output tokens over ${n(t.calls)} requests (${n(t.tokens)} counting the cache), across <span class="din num">${(t.active_min / 60).toFixed(1)}</span> busy hours.`);
+  let first = `Today your agents ate ${n(t.output)} output tokens over ${n(t.calls)} requests (${n(t.tokens)} counting the cache), across <span class="din num">${(t.active_min / 60).toFixed(1)}</span> busy hours`;
+  const ps = S.days ? paceStats(S.days.week, paceHourFrac(now(), off())) : null;
+  if (ps) {
+    const hh = esc(hhmm(now()));
+    const rtxt = esc(ps.ratio.toFixed(1));
+    let cmp;
+    if (ps.ratio >= 1) cmp = `about ${rtxt}x your usual day`;
+    else if (ps.ratio >= 0.45 && ps.ratio <= 0.6) cmp = "about half your usual";
+    else cmp = `about ${esc(Math.round(ps.ratio * 100))}% of your usual`;
+    const tip = `<b>Your usual by ${hh}</b> is the median weighted usage of your <b>${esc(ps.daysUsed)}</b> earlier active days at this time, counting whole hours plus a slice of the current hour. Today is <b>${rtxt}</b> times that.`;
+    first += `; <span class="pace" data-tip="${esc(tip)}">${cmp} by ${hh}</span>`;
+  }
+  parts.push(first + ".");
   if (L.health.t3 === "ok") parts.push(`T3 ran ${n(t.runs)} runs in ${n(t.threads)} threads and ${n(t.subagents)} subagents, and linked ${n(t.prs)} PRs.`);
   else parts.push("T3 thread data is unavailable right now.");
   if (t.hits) parts.push(`You reached the usage limit ${t.hits === 1 ? "once" : t.hits + " times"} today.`);
@@ -1420,18 +1492,24 @@ function monthHtml(D) {
   }
   const maxW = Math.max(1e-9, ...M.map((m) => m.w));
   const totW = M.reduce((a, m) => a + (Number(m.w) || 0), 0);
+  const avgInfo = paceAverageActive(M);
+  const avg = avgInfo.avg;
+  const avgLine = avg > 0 ? `<i class="avgline" style="bottom:calc(15px + ${((avg / maxW) * 40).toFixed(1)}px)"></i>` : "";
+  const avgTip = `The dashed line is your average <b>active</b> day over the last 30 days: <b>${compact(avg)}</b> weighted units across <b>${avgInfo.count}</b> days with usage.`;
+  const legend = avg > 0 ? `<span class="avgkey" data-tip="${esc(avgTip)}"><i></i>${esc(compact(avg))} avg active day</span>` : "";
   const cols = M.map((m, i) => {
     const p = dayParts(m.day);
     const today = i === M.length - 1;
     const t = m.t || [0, 0, 0, 0, 0];
     const segs = (m.fam || []).map((v, f) => (v > 0 ? `<i style="height:${((v / maxW) * 40).toFixed(1)}px;background:var(--m${f})"></i>` : "")).join("");
-    const tip = `<b>${p.wd} ${esc(p.short)}</b><br><b>${esc(compact(t[1]))}</b> output tokens<br>${esc(full(m.n))} requests<br>API-equivalent ${esc(usd(m.w))}`;
+    const tip = `<b>${p.wd} ${esc(p.short)}</b><br><b>${esc(compact(t[1]))}</b> output tokens<br>${esc(full(m.n))} requests<br>API-equivalent ${esc(usd(m.w))}` +
+      (avg > 0 ? `<br>${esc((m.w / avg).toFixed(1))}x your average active day` : "");
     const aria = `${p.wd} ${p.short}: ${compact(t[1])} output tokens, ${full(m.n)} requests, API-equivalent ${usd(m.w)}`;
     const label = i % 5 === 0 ? esc(p.short.split(" ")[1] || "") : "";
     return `<div class="mcol${today ? " today" : ""}${m.w > 0 ? "" : " zero"}" data-tip="${esc(tip)}" role="img" aria-label="${esc(aria)}"><div class="mbars">${segs}</div><div class="mlab">${label}</div></div>`;
   }).join("");
-  return `<div class="monthbox" id="monthBox"><div class="monthhead"><h3>the last 30 days</h3><div class="monthtot"><span class="big num">${esc(compact(totW))}</span><span>weighted units</span><span class="num" data-tip="Weighted usage divided by 1,000,000, an API-equivalent estimate">${esc(usd(totW))}</span></div></div>
-    <div class="monthcols">${cols}</div><p class="fine">Daily totals only: no sessions, hours or per-thread detail. API-equivalent dollars are w / 1,000,000, an estimate; your plan is not billed this way.</p></div>`;
+  return `<div class="monthbox" id="monthBox"><div class="monthhead"><h3>the last 30 days</h3><div class="monthtot"><span class="big num">${esc(compact(totW))}</span><span>weighted units</span><span class="num" data-tip="Weighted usage divided by 1,000,000, an API-equivalent estimate">${esc(usd(totW))}</span>${legend}</div></div>
+    <div class="monthcols">${avgLine}${cols}</div><p class="fine">Daily totals only: no sessions, hours or per-thread detail. API-equivalent dollars are w / 1,000,000, an estimate; your plan is not billed this way.</p></div>`;
 }
 
 function renderDays(force) {
@@ -1770,6 +1848,12 @@ function alerts(L) {
   if (pct != null && pct >= 0.8) events.push([`p80:${w.start_ms}`, `The plate is ${Math.round(pct * 100)}% eaten`, `Resets at ${hhmm(w.end_ms)}. Estimated from this Mac's usage.`]);
   const wk = weekState();
   if (wk && wk.cal && wk.cap > 0 && wk.pct >= 0.8) events.push([`w80:${wk.start}`, `The weekly meter is ${Math.round(wk.pct * 100)}% used`, `Resets ${weekWdTime(wk.reset)}. Estimated from this Mac's usage.`]);
+  if (S.days && S.days.week && S.days.week.length) {
+    const ps = paceStats(S.days.week, paceHourFrac(now(), off()));
+    if (ps && ps.ratio >= 2 && ps.today > ps.normalFull * 0.1) {
+      events.push([`busyday:${ps.day}`, "Busy day", `About ${ps.ratio.toFixed(1)}x your usual by ${hhmm(now())}.`]);
+    }
+  }
   if (w && w.active && w.cap) for (const t of L.threads) {
     const share = (t.eat30 || 0) / w.cap.used;
     if (share >= 0.25) events.push([`binge:${t.id}:${w.start_ms}`, `${t.title || "A thread"} is binging`, `It ate ${Math.round(share * 100)}% of the 5-hour plate in the last 30 minutes. Check it is not stuck in a loop.`]);
@@ -1950,7 +2034,7 @@ function onLive(L) {
   else { renderHeader(); renderReadout(); renderBoard(); renderWindow(); renderSpark(); renderFoot(); tick(); }
   alerts(L);
 }
-function onDays(raw) { S.rawDays = raw; S.days = JSON.parse(raw); if (document.hidden) S.behind = true; else renderDays(false); }
+function onDays(raw) { S.rawDays = raw; S.days = JSON.parse(raw); if (document.hidden) S.behind = true; else { renderDays(false); renderReadout(); } }
 function onFeed(items, fresh) {
   for (const f of items) { if (fresh && !S.feed.has(f.id)) S.fresh.add(f.id); S.feed.set(f.id, f); }
   if (S.feed.size > 600) { const sorted = [...S.feed.values()].sort((a, b) => a.ts - b.ts); for (const f of sorted.slice(0, S.feed.size - 600)) S.feed.delete(f.id); }
