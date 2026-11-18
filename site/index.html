@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en-US">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,6 +11,8 @@
 <meta property="og:title" content="Who Ate My Tokens? Your agents, caught snacking live">
 <meta property="og:description" content="A local, read-only token observation layer for T3 Code, Claude Code and Codex. One Rust binary, one page, and nothing leaves your machine.">
 <meta property="og:image" content="https://whoatemytokens.neelbanker.com/img/social-preview.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Who Ate My Tokens? Token observation layer for T3 Code, Claude Code and Codex">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Who Ate My Tokens? Your agents, caught snacking live">
@@ -36,7 +38,7 @@
       <span class="brand-word">wamt</span>
       <a class="ticket ticket-home" href="https://neelbanker.com">&#8592; Neel Banker</a>
     </div>
-    <button type="button" class="iconbtn theme-toggle" data-theme-toggle aria-pressed="false" hidden>Theme</button>
+    <button type="button" class="iconbtn theme-toggle" data-theme-toggle aria-label="Dark theme" aria-pressed="false" hidden><span class="theme-moon" aria-hidden="true">&#9789;</span><span class="theme-sun" aria-hidden="true">&#9728;&#65038;</span></button>
     <button type="button" class="iconbtn menu-toggle" data-menu-toggle aria-expanded="false" aria-controls="main-nav" hidden>Menu</button>
     <nav id="main-nav" class="main-nav" data-menu aria-label="Main navigation">
       <a class="ticket t-sky" href="#live">Live &#8594;</a>
@@ -45,7 +47,7 @@
       <a class="ticket t-sage" href="#saving">Saving &#8594;</a>
       <a class="ticket t-rose" href="#alerts">Alerts &#8594;</a>
       <a class="ticket" href="#evidence">Evidence &#8594;</a>
-      <a class="ticket ticket-primary" href="https://github.com/bankerneel/wamt">GitHub &#8599;</a>
+      <a class="ticket ticket-secondary" href="https://github.com/bankerneel/wamt">GitHub &#8599;</a>
     </nav>
   </div>
 </header>
@@ -58,16 +60,16 @@
         <h1 class="hero-title" id="hero-title">
           <span class="sr-only">Who Ate My Tokens?</span>
           <span class="wordmark" aria-hidden="true">
-            <img class="wordmark-light" src="/img/wordmark.svg" alt="" width="102" height="32">
-            <img class="wordmark-dark" src="/img/wordmark-dark.svg" alt="" width="102" height="32">
+            <img class="wordmark-light" src="/img/wordmark.svg" alt="" width="108" height="33">
+            <img class="wordmark-dark" src="/img/wordmark-dark.svg" alt="" width="108" height="33">
           </span>
         </h1>
         <p class="tagline">your agents, caught snacking live</p>
-        <p class="invitation">Follow the crumbs.</p>
+        <div class="hero-detail">
         <p class="hero-sub">A local, read-only token observation layer for T3 Code, Claude Code and Codex. It shows live threads and subagents with the model behind each one, the 5-hour and weekly limits, a 30-day history and API-equivalent cost by project. One Rust binary, one page, and nothing leaves your machine.</p>
         <div class="hero-actions">
-          <a class="ticket ticket-primary" href="#live">See the screenshots &#8595;</a>
-          <a class="ticket ticket-secondary" href="https://github.com/bankerneel/wamt">Get wamt on GitHub &#8599;</a>
+          <a class="ticket ticket-secondary" href="#live">See the screenshots &#8595;</a>
+          <a class="ticket ticket-primary" href="https://github.com/bankerneel/wamt">Get wamt on GitHub &#8599;</a>
         </div>
         <ul class="badges" aria-label="At a glance">
           <li class="ticket t-butter">MIT</li>
@@ -75,6 +77,7 @@
           <li class="ticket t-lilac">macOS first</li>
           <li class="ticket t-sage">Local only</li>
         </ul>
+        </div>
       </div>
       <div class="hero-scene scene-host">
         <div class="scene" data-scene="hero">
@@ -95,14 +98,15 @@
           <div class="scene" data-scene="stage">
             <div class="sprite" data-sprite="plate" aria-hidden="true"></div>
             <div class="sprite" data-sprite="cookie" aria-hidden="true"></div>
+            <div class="sprite" data-sprite="burst" aria-hidden="true" hidden></div>
             <div class="sprite" data-sprite="coral" aria-hidden="true"></div>
             <div class="sprite" data-sprite="lilac" aria-hidden="true"></div>
             <div class="sprite" data-sprite="blue" aria-hidden="true"></div>
           </div>
         </div>
         <div class="plate-meter">
-          <span class="plate-meter-label">Plate left</span>
-          <meter data-plate-meter min="0" max="7" value="7">7 of 7</meter>
+          <label for="plate-left" class="plate-meter-label">Plate left</label>
+          <meter id="plate-left" data-plate-meter min="0" max="7" value="7">7 of 7</meter>
           <span data-plate-label aria-hidden="true">whole</span>
         </div>
       </div>
@@ -111,7 +115,6 @@
     <div class="beats">
 
       <section class="beat beat-facts" id="facts" data-beat="1" aria-labelledby="h-facts">
-        <span class="ticket t-sky beat-tag">Receipts, not adjectives</span>
         <h2 class="beat-title" id="h-facts">Receipts, not adjectives</h2>
         <ul class="fact-tickets">
           <li class="ticket t-butter">One Rust binary</li>
@@ -123,35 +126,32 @@
       </section>
 
       <section class="beat beat-live" id="live" data-beat="2" aria-labelledby="h-live">
-        <span class="ticket t-sky beat-tag">Live view</span>
         <h2 class="beat-title" id="h-live">Live view</h2>
         <p>Every active T3 Code thread with its subagents, model, current step, context fill and tokens so far. Click a row, or press Enter, for that thread's runs, tool counts and a 10-minute token timeline.</p>
-        <p>Claude Code and Codex sessions outside T3 appear as their own lanes. Press / to filter by title, project, branch or model. The tab title and favicon show the plate and anything waiting on you.</p>
+        <p>Claude Code and Codex sessions outside T3 appear as their own lanes. Press <kbd>/</kbd> to filter by title, project, branch or model. The tab title and favicon show the plate and anything waiting on you.</p>
         <figure class="shot shot-wide">
           <a class="shot-link" href="/img/screenshots/overview-light-full.webp" data-exhibit data-exhibit-title="Exhibit A: the live view" aria-label="Open Exhibit A: the live view at full size">
             <span class="tape" aria-hidden="true"></span>
-            <img src="/img/screenshots/overview-light.webp" srcset="/img/screenshots/overview-light.webp 720w, /img/screenshots/overview-light-full.webp 1400w" sizes="(max-width: 760px) 90vw, 60vw" width="1400" height="700" alt="The wamt overview in the light theme" loading="lazy" decoding="async">
+            <img src="/img/screenshots/overview-light.webp" srcset="/img/screenshots/overview-light.webp 640w, /img/screenshots/overview-light-full.webp 1400w" sizes="(max-width: 760px) 90vw, 60vw" width="1400" height="700" alt="The wamt overview in the light theme" loading="lazy" decoding="async">
           </a>
           <figcaption><span class="exhibit-tag">Exhibit A: the live view</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
         </figure>
       </section>
 
       <section class="beat beat-limits" id="limits" data-beat="3" aria-labelledby="h-limits">
-        <span class="ticket t-butter beat-tag">Limits</span>
         <h2 class="beat-title" id="h-limits">Limits</h2>
         <p>A 5-hour plate with a run-out forecast from the last 30 minutes, plus Codex's own limit line.</p>
-        <p>A weekly meter. When Claude Code's status line reports rate_limits, those numbers become the hero percentage and reset time, and the local estimate is shown alongside. A manual "Calibrate from /usage" fallback is kept only in this browser.</p>
+        <p>A weekly meter. When Claude Code's status line reports <code>rate_limits</code>, those numbers become the hero percentage and reset time, and the local estimate is shown alongside. A manual "Calibrate from /usage" fallback is kept only in this browser.</p>
         <figure class="shot shot-tall">
-          <a class="shot-link" href="/img/screenshots/plate-full.webp" data-exhibit data-exhibit-title="Exhibit C: the plate" aria-label="Open Exhibit C: the plate at full size">
+          <a class="shot-link" href="/img/screenshots/plate.webp" data-exhibit data-exhibit-title="Exhibit C: the plate" aria-label="Open Exhibit C: the plate at full size">
             <span class="tape" aria-hidden="true"></span>
-            <img src="/img/screenshots/plate.webp" srcset="/img/screenshots/plate.webp 425w, /img/screenshots/plate-full.webp 425w" sizes="(max-width: 760px) 80vw, 320px" width="425" height="610" alt="The 5-hour plate with its forecast" loading="lazy" decoding="async">
+            <img src="/img/screenshots/plate.webp" width="425" height="610" alt="The 5-hour plate with its forecast" loading="lazy" decoding="async">
           </a>
           <figcaption><span class="exhibit-tag">Exhibit C: the plate</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
         </figure>
       </section>
 
       <section class="beat beat-history" id="history" data-beat="4" aria-labelledby="h-history">
-        <span class="ticket t-lilac beat-tag">History and cost</span>
         <h2 class="beat-title" id="h-history">History and cost</h2>
         <p>Today against yesterday and the day before, then the week so far and a compact 30-day strip stacked by model family.</p>
         <p>PRs with CI checks and review states, spoiled leftovers (requests that rebuilt over 50K tokens of expired cache) and API-equivalent dollars at list prices. "Who ate it, by project" rolls 30 days up by T3 project title, or by working-folder name outside T3. Copy yesterday, copy today and download CSV.</p>
@@ -160,14 +160,14 @@
           <figure class="shot shot-wide">
             <a class="shot-link" href="/img/screenshots/timeline-full.webp" data-exhibit data-exhibit-title="Exhibit D: the timeline" aria-label="Open Exhibit D: the timeline at full size">
               <span class="tape" aria-hidden="true"></span>
-              <img src="/img/screenshots/timeline.webp" srcset="/img/screenshots/timeline.webp 720w, /img/screenshots/timeline-full.webp 1370w" sizes="(max-width: 760px) 90vw, 44vw" width="1370" height="520" alt="The day timeline with busy-at-once lanes" loading="lazy" decoding="async">
+              <img src="/img/screenshots/timeline.webp" srcset="/img/screenshots/timeline.webp 640w, /img/screenshots/timeline-full.webp 1370w" sizes="(max-width: 760px) 90vw, 44vw" width="1370" height="520" alt="The day timeline with busy-at-once lanes" loading="lazy" decoding="async">
             </a>
             <figcaption><span class="exhibit-tag">Exhibit D: the timeline</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
           </figure>
           <figure class="shot shot-wide">
             <a class="shot-link" href="/img/screenshots/projects-full.webp" data-exhibit data-exhibit-title="Exhibit E: cost by project" aria-label="Open Exhibit E: cost by project at full size">
               <span class="tape" aria-hidden="true"></span>
-              <img src="/img/screenshots/projects.webp" srcset="/img/screenshots/projects.webp 720w, /img/screenshots/projects-full.webp 1370w" sizes="(max-width: 760px) 90vw, 44vw" width="1370" height="450" alt="Cost by project over 30 days" loading="lazy" decoding="async">
+              <img src="/img/screenshots/projects.webp" srcset="/img/screenshots/projects.webp 640w, /img/screenshots/projects-full.webp 1370w" sizes="(max-width: 760px) 90vw, 44vw" width="1370" height="450" alt="Cost by project over 30 days" loading="lazy" decoding="async">
             </a>
             <figcaption><span class="exhibit-tag">Exhibit E: cost by project</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
           </figure>
@@ -175,34 +175,31 @@
       </section>
 
       <section class="beat beat-saving" id="saving" data-beat="5" aria-labelledby="h-saving">
-        <span class="ticket t-rose beat-tag">Saving tokens</span>
         <h2 class="beat-title" id="h-saving">Saving tokens</h2>
         <p>Diet tips for today and yesterday: heavy contexts, peak concurrency, marathon sessions, Opus subagents, spoiled cache and the note-taker's share. Each tip names the threads behind it. No message content is read.</p>
         <figure class="shot shot-tall">
-          <a class="shot-link" href="/img/screenshots/drill-full.webp" data-exhibit data-exhibit-title="Exhibit F: the thread drill-down" aria-label="Open Exhibit F: the thread drill-down at full size">
+          <a class="shot-link" href="/img/screenshots/drill.webp" data-exhibit data-exhibit-title="Exhibit F: the thread drill-down" aria-label="Open Exhibit F: the thread drill-down at full size">
             <span class="tape" aria-hidden="true"></span>
-            <img src="/img/screenshots/drill.webp" srcset="/img/screenshots/drill.webp 605w, /img/screenshots/drill-full.webp 605w" sizes="(max-width: 760px) 80vw, 320px" width="605" height="1150" alt="A thread drill-down with runs and a token timeline" loading="lazy" decoding="async">
+            <img src="/img/screenshots/drill.webp" width="605" height="1150" alt="A thread drill-down with runs and a token timeline" loading="lazy" decoding="async">
           </a>
           <figcaption><span class="exhibit-tag">Exhibit F: the thread drill-down</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
         </figure>
       </section>
 
       <section class="beat beat-alerts" id="alerts" data-beat="6" aria-labelledby="h-alerts">
-        <span class="ticket t-butter beat-tag">Alerts</span>
         <h2 class="beat-title" id="h-alerts">Alerts</h2>
         <p>"Notify me" enables desktop notifications for a thread waiting on you, a cache about to go cold, a thread passing 85% context, one thread eating over 25% of the plate in 30 minutes, the plate passing 80% or running out before reset, and a summary after 20:00.</p>
 
         <div class="sharing" id="sharing">
-          <span class="ticket t-sky beat-tag">Sharing and privacy</span>
           <h3 class="sharing-title" id="h-sharing">Sharing and privacy</h3>
-          <p>A tiny /api/brief JSON summary for a menu-bar plugin or status line.</p>
-          <p>Screenshots can be taken safely with demo mode: open /?demo and the page loads synthetic fixtures instead of any live data. Read-only on ~/.t3, ~/.claude and ~/.codex. Metadata only. Binds to 127.0.0.1. No outside requests.</p>
+          <p>A tiny <code>/api/brief</code> JSON summary for a menu-bar plugin or status line.</p>
+          <p>Screenshots can be taken safely with demo mode: open <code>/?demo</code> and the page loads synthetic fixtures instead of any live data. Read-only on <code>~/.t3</code>, <code>~/.claude</code> and <code>~/.codex</code>. Metadata only. Binds to 127.0.0.1. No outside requests.</p>
           <p class="aside">macOS first. Linux works for the server. Windows coming.</p>
           <p class="disclaimer">Not affiliated with Anthropic, OpenAI or the T3 Code project.</p>
           <figure class="shot shot-phone">
-            <a class="shot-link" href="/img/screenshots/phone-full.webp" data-exhibit data-exhibit-title="Exhibit G: the page on a phone" aria-label="Open Exhibit G: the page on a phone at full size">
+            <a class="shot-link" href="/img/screenshots/phone.webp" data-exhibit data-exhibit-title="Exhibit G: the page on a phone" aria-label="Open Exhibit G: the page on a phone at full size">
               <span class="tape" aria-hidden="true"></span>
-              <img src="/img/screenshots/phone.webp" srcset="/img/screenshots/phone.webp 390w, /img/screenshots/phone-full.webp 390w" sizes="(max-width: 760px) 70vw, 240px" width="390" height="1900" alt="The page on a phone" loading="lazy" decoding="async">
+              <img src="/img/screenshots/phone.webp" width="390" height="1900" alt="The page on a phone" loading="lazy" decoding="async">
             </a>
             <figcaption><span class="exhibit-tag">Exhibit G: the page on a phone</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
           </figure>
@@ -212,78 +209,76 @@
     </div>
   </div>
 
-  <section class="evidence-board board-band" id="evidence" aria-labelledby="h-evidence">
+  <section data-reveal class="evidence-board board-band" id="evidence" aria-labelledby="h-evidence">
     <div class="page-wrap">
-      <span class="ticket t-rose band-tag">The evidence board</span>
       <h2 class="band-title" id="h-evidence">The evidence board</h2>
-      <p class="band-intro">Seven photos from the scene. Pin one up to see it whole.</p>
+      <p class="band-intro">Select a photo to see it full size.</p>
       <div class="board-pins">
 
         <figure class="exhibit ex-a">
           <a class="exhibit-link" href="/img/screenshots/overview-light-full.webp" data-exhibit data-exhibit-title="Exhibit A: the live view" aria-label="Open Exhibit A: the live view at full size">
             <span class="tape" aria-hidden="true"></span>
-            <img src="/img/screenshots/overview-light.webp" srcset="/img/screenshots/overview-light.webp 720w, /img/screenshots/overview-light-full.webp 1400w" sizes="(max-width: 760px) 88vw, 40vw" width="1400" height="700" alt="The wamt overview in the light theme" loading="lazy" decoding="async">
+            <img src="/img/screenshots/overview-light.webp" srcset="/img/screenshots/overview-light.webp 640w, /img/screenshots/overview-light-full.webp 1400w" sizes="(max-width: 760px) 88vw, 40vw" width="1400" height="700" alt="The wamt overview in the light theme" loading="lazy" decoding="async">
           </a>
-          <figcaption><span class="exhibit-tag"><span class="exhibit-no">01</span> Exhibit A: the live view</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
+          <figcaption><span class="exhibit-tag">Exhibit A: the live view</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
         </figure>
 
         <figure class="exhibit ex-b">
           <a class="exhibit-link" href="/img/screenshots/overview-dark-full.webp" data-exhibit data-exhibit-title="Exhibit B: the live view after dark" aria-label="Open Exhibit B: the live view after dark at full size">
             <span class="tape" aria-hidden="true"></span>
-            <img src="/img/screenshots/overview-dark.webp" srcset="/img/screenshots/overview-dark.webp 720w, /img/screenshots/overview-dark-full.webp 1400w" sizes="(max-width: 760px) 88vw, 40vw" width="1400" height="700" alt="The wamt overview in the dark theme" loading="lazy" decoding="async">
+            <img src="/img/screenshots/overview-dark.webp" srcset="/img/screenshots/overview-dark.webp 640w, /img/screenshots/overview-dark-full.webp 1400w" sizes="(max-width: 760px) 88vw, 40vw" width="1400" height="700" alt="The wamt overview in the dark theme" loading="lazy" decoding="async">
           </a>
-          <figcaption><span class="exhibit-tag"><span class="exhibit-no">02</span> Exhibit B: the live view after dark</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
+          <figcaption><span class="exhibit-tag">Exhibit B: the live view after dark</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
         </figure>
 
         <figure class="exhibit ex-c">
-          <a class="exhibit-link" href="/img/screenshots/plate-full.webp" data-exhibit data-exhibit-title="Exhibit C: the plate" aria-label="Open Exhibit C: the plate at full size">
+          <a class="exhibit-link" href="/img/screenshots/plate.webp" data-exhibit data-exhibit-title="Exhibit C: the plate" aria-label="Open Exhibit C: the plate at full size">
             <span class="tape" aria-hidden="true"></span>
-            <img src="/img/screenshots/plate.webp" srcset="/img/screenshots/plate.webp 425w, /img/screenshots/plate-full.webp 425w" sizes="(max-width: 760px) 70vw, 260px" width="425" height="610" alt="The 5-hour plate with its forecast" loading="lazy" decoding="async">
+            <img src="/img/screenshots/plate.webp" width="425" height="610" alt="The 5-hour plate with its forecast" loading="lazy" decoding="async">
           </a>
-          <figcaption><span class="exhibit-tag"><span class="exhibit-no">03</span> Exhibit C: the plate</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
+          <figcaption><span class="exhibit-tag">Exhibit C: the plate</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
         </figure>
 
         <figure class="exhibit ex-d">
           <a class="exhibit-link" href="/img/screenshots/timeline-full.webp" data-exhibit data-exhibit-title="Exhibit D: the timeline" aria-label="Open Exhibit D: the timeline at full size">
             <span class="tape" aria-hidden="true"></span>
-            <img src="/img/screenshots/timeline.webp" srcset="/img/screenshots/timeline.webp 720w, /img/screenshots/timeline-full.webp 1370w" sizes="(max-width: 760px) 88vw, 48vw" width="1370" height="520" alt="The day timeline with busy-at-once lanes" loading="lazy" decoding="async">
+            <img src="/img/screenshots/timeline.webp" srcset="/img/screenshots/timeline.webp 640w, /img/screenshots/timeline-full.webp 1370w" sizes="(max-width: 760px) 88vw, 48vw" width="1370" height="520" alt="The day timeline with busy-at-once lanes" loading="lazy" decoding="async">
           </a>
-          <figcaption><span class="exhibit-tag"><span class="exhibit-no">04</span> Exhibit D: the timeline</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
+          <figcaption><span class="exhibit-tag">Exhibit D: the timeline</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
         </figure>
 
         <figure class="exhibit ex-e">
           <a class="exhibit-link" href="/img/screenshots/projects-full.webp" data-exhibit data-exhibit-title="Exhibit E: cost by project" aria-label="Open Exhibit E: cost by project at full size">
             <span class="tape" aria-hidden="true"></span>
-            <img src="/img/screenshots/projects.webp" srcset="/img/screenshots/projects.webp 720w, /img/screenshots/projects-full.webp 1370w" sizes="(max-width: 760px) 88vw, 48vw" width="1370" height="450" alt="Cost by project over 30 days" loading="lazy" decoding="async">
+            <img src="/img/screenshots/projects.webp" srcset="/img/screenshots/projects.webp 640w, /img/screenshots/projects-full.webp 1370w" sizes="(max-width: 760px) 88vw, 48vw" width="1370" height="450" alt="Cost by project over 30 days" loading="lazy" decoding="async">
           </a>
-          <figcaption><span class="exhibit-tag"><span class="exhibit-no">05</span> Exhibit E: cost by project</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
+          <figcaption><span class="exhibit-tag">Exhibit E: cost by project</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
         </figure>
 
         <figure class="exhibit ex-f">
-          <a class="exhibit-link" href="/img/screenshots/drill-full.webp" data-exhibit data-exhibit-title="Exhibit F: the thread drill-down" aria-label="Open Exhibit F: the thread drill-down at full size">
+          <a class="exhibit-link" href="/img/screenshots/drill.webp" data-exhibit data-exhibit-title="Exhibit F: the thread drill-down" aria-label="Open Exhibit F: the thread drill-down at full size">
             <span class="tape" aria-hidden="true"></span>
-            <img src="/img/screenshots/drill.webp" srcset="/img/screenshots/drill.webp 605w, /img/screenshots/drill-full.webp 605w" sizes="(max-width: 760px) 60vw, 240px" width="605" height="1150" alt="A thread drill-down with runs and a token timeline" loading="lazy" decoding="async">
+            <img src="/img/screenshots/drill.webp" width="605" height="1150" alt="A thread drill-down with runs and a token timeline" loading="lazy" decoding="async">
           </a>
-          <figcaption><span class="exhibit-tag"><span class="exhibit-no">06</span> Exhibit F: the thread drill-down</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
+          <figcaption><span class="exhibit-tag">Exhibit F: the thread drill-down</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
         </figure>
 
         <figure class="exhibit ex-g">
-          <a class="exhibit-link" href="/img/screenshots/phone-full.webp" data-exhibit data-exhibit-title="Exhibit G: the page on a phone" aria-label="Open Exhibit G: the page on a phone at full size">
+          <a class="exhibit-link" href="/img/screenshots/phone.webp" data-exhibit data-exhibit-title="Exhibit G: the page on a phone" aria-label="Open Exhibit G: the page on a phone at full size">
             <span class="tape" aria-hidden="true"></span>
-            <img src="/img/screenshots/phone.webp" srcset="/img/screenshots/phone.webp 390w, /img/screenshots/phone-full.webp 390w" sizes="(max-width: 760px) 55vw, 220px" width="390" height="1900" alt="The page on a phone" loading="lazy" decoding="async">
+            <img src="/img/screenshots/phone.webp" width="390" height="1900" alt="The page on a phone" loading="lazy" decoding="async">
           </a>
-          <figcaption><span class="exhibit-tag"><span class="exhibit-no">07</span> Exhibit G: the page on a phone</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
+          <figcaption><span class="exhibit-tag">Exhibit G: the page on a phone</span><span class="demo-note">From built-in demo mode, so it contains no real data</span></figcaption>
         </figure>
 
       </div>
     </div>
   </section>
 
-  <section class="lineup-section" id="suspects" aria-labelledby="h-suspects">
+  <section data-reveal class="lineup-section" id="suspects" aria-labelledby="h-suspects">
     <div class="page-wrap">
-      <span class="ticket t-lilac band-tag">The usual suspects</span>
       <h2 class="band-title" id="h-suspects">The usual suspects</h2>
-      <p class="band-intro">Three of them. One plate. Hover or focus to see who flinches.</p>
+      <p class="band-intro" data-reaction-hint>Hover or focus to see who flinches.</p>
       <ul class="lineup">
         <li class="suspect" tabindex="0" data-suspect="coral">
           <div class="suspect-paper">
@@ -325,21 +320,19 @@
         </div>
       </div>
       <div class="install-copy">
-        <span class="ticket t-rose band-tag">Caught in the act</span>
         <h2 class="caught-title" id="h-install">caught in the act</h2>
         <p class="install-note">Open it at http://127.0.0.1:7317 once it is running.</p>
         <div class="quickstart">
-          <div class="quickstart-bar"><span class="quickstart-label">Quick start</span><button type="button" class="ticket copy-btn" data-copy>Copy</button></div>
-          <pre><code data-command>cargo build --release
+          <div class="quickstart-bar"><span class="quickstart-label" id="quickstart-label">Quick start</span><button type="button" class="ticket copy-btn" data-copy hidden>Copy</button></div>
+          <pre aria-labelledby="quickstart-label"><code data-command>cargo build --release
 scripts/wamt start
 scripts/wamt open
 scripts/wamt login on        # optional: start at login, low priority
-scripts/wamt statusline on   # optional: show the plate in Claude Code
-</code></pre>
+scripts/wamt statusline on   # optional: show the plate in Claude Code</code></pre>
           <span class="copy-status" data-copy-status role="status" aria-live="polite"></span>
         </div>
         <div class="hero-actions install-actions">
-          <a class="ticket ticket-primary" href="https://github.com/bankerneel/wamt">Star on GitHub &#8599;</a>
+          <a class="ticket ticket-primary" href="https://github.com/bankerneel/wamt">Get wamt on GitHub &#8599;</a>
           <a class="ticket ticket-secondary" href="https://github.com/bankerneel/wamt#readme">Read the README &#8599;</a>
           <a class="ticket ticket-secondary" href="#evidence">Browse the screenshots &#8593;</a>
         </div>
@@ -376,14 +369,14 @@ scripts/wamt statusline on   # optional: show the plate in Claude Code
 </footer>
 
 <dialog id="evidence-dialog" aria-labelledby="evidence-title">
-  <div class="evidence-dialog-inner">
-    <button type="button" class="ticket dialog-close" data-exhibit-close aria-label="Close exhibit">Close</button>
-    <h2 class="ticket t-sky dialog-title" id="evidence-title" data-exhibit-title></h2>
-    <figure class="dialog-figure">
-      <img data-exhibit-image alt="" width="1400" height="700">
-      <figcaption>From built-in demo mode, so it contains no real data</figcaption>
-    </figure>
+  <div class="dialog-bar">
+    <h2 class="dialog-title" id="evidence-title" data-exhibit-title>Demo screenshot</h2>
+    <button type="button" class="ticket dialog-close" data-exhibit-close autofocus aria-label="Close exhibit">Close</button>
   </div>
+  <figure class="dialog-figure">
+    <img data-exhibit-image src="/img/screenshots/overview-light.webp" alt="" width="1400" height="700" loading="lazy">
+    <figcaption>From built-in demo mode, so it contains no real data</figcaption>
+  </figure>
 </dialog>
 
 </body>

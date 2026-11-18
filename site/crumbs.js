@@ -157,7 +157,10 @@
     if (!best) best = hosts[0];
     if (best === active) return;
     active = best;
-    if (canvas.parentNode !== active) active.appendChild(canvas);
+    if (canvas.parentNode !== active) {
+      if (canvas.parentNode) canvas.parentNode.removeAttribute('data-crumbs-host');
+      active.appendChild(canvas);
+    }
     sizeCanvas();
     if (isFinale()) syncSpill(false);
     else spill = [];
@@ -195,11 +198,12 @@
   }
 
   function heapRest(k) {
-    var row = Math.floor((Math.sqrt(8 * k + 1) - 1) / 2);
-    var idx = k - (row * (row + 1)) / 2;
-    var ground = Math.max(FRAME, H - FRAME);
-    var x = srcX + (idx - row / 2) * FRAME + (hash(k * 7 + 1) * 6 - 3);
-    var y = ground - row * (FRAME - 2);
+    var slots = Math.min(17, Math.max(1, Math.floor(W / 9) - 2));
+    var row = Math.floor(k / slots);
+    var idx = k % slots;
+    var ground = Math.max(FRAME, H - 10);
+    var x = srcX + Math.ceil(idx / 2) * (idx % 2 ? 9 : -9) + (hash(k * 7 + 1) * 6 - 3);
+    var y = ground - row * 5 - (k % 3);
     return {
       x: clamp(Math.round(x), FRAME / 2, W - FRAME / 2),
       y: clamp(Math.round(y), FRAME / 2, H - FRAME / 2)
@@ -240,7 +244,7 @@
         x: animate ? srcX : rest.x,
         y: animate ? srcY : rest.y,
         rx: rest.x, ry: rest.y,
-        vx: animate ? (hash(k * 3 + 11) * 2 - 1) * 1.6 : 0,
+        vx: animate ? (rest.x - srcX) * 0.052 : 0,
         vy: animate ? -1.2 - hash(k * 5 + 7) * 1.4 : 0,
         settled: !animate,
         bounces: 2
@@ -397,8 +401,8 @@
     }
     if (!canvas.getAttribute('data-crumbs-painted')) {
       canvas.setAttribute('data-crumbs-painted', '1');
-      if (active) active.setAttribute('data-crumbs-host', '1');
     }
+    if (active) active.setAttribute('data-crumbs-host', '1');
   }
 
   if (document.readyState === 'loading') {
