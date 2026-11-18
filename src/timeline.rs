@@ -100,7 +100,6 @@ pub fn build(shared: &Mutex<Shared>, db: &Path, now: i64, target: i32) -> Result
             ),
             None => (HashMap::new(), HashMap::new()),
         };
-        let infos = (*sh.tx.sessions).clone();
         let mut outside: Vec<(i64, OutLane)> = Vec::new();
         let mut sessions_available = false;
         if let Some((_, agg)) = sh.tx.days.iter().find(|(d, _)| *d == target) {
@@ -110,7 +109,12 @@ pub fn build(shared: &Mutex<Shared>, db: &Path, now: i64, target: i32) -> Result
                 if session_to_thread.contains_key(sid) {
                     continue;
                 }
-                let info = infos.get(sid);
+                let info = sh.tx.sessions.get(sid);
+                // claude-mem note-taker sessions are many, tiny and short:
+                // they would crowd out real work, so they get no lane.
+                if info.is_some_and(|i| i.obs) {
+                    continue;
+                }
                 let title = info.and_then(|i| i.title.clone()).unwrap_or_else(|| sid.clone());
                 let model = info.and_then(|i| i.model.clone());
                 let ticks: Vec<u16> = if target == today {
