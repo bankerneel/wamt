@@ -286,6 +286,7 @@
             <div class="suspect-frame"><div class="sprite" data-sprite="coral" aria-hidden="true"></div></div>
             <h3 class="suspect-name">T3 Code</h3>
             <p class="suspect-note">threads and subagents</p>
+            <p class="suspect-alibi">Read only state, short transactions. I never wrote a thing.</p>
           </div>
         </li>
         <li class="suspect" tabindex="0" data-suspect="lilac">
@@ -294,6 +295,7 @@
             <div class="suspect-frame"><div class="sprite" data-sprite="lilac" aria-hidden="true"></div></div>
             <h3 class="suspect-name">Claude Code</h3>
             <p class="suspect-note">sessions and limits</p>
+            <p class="suspect-alibi">JSONL transcripts, metadata only. The messages never leave the parser.</p>
           </div>
         </li>
         <li class="suspect" tabindex="0" data-suspect="blue">
@@ -302,9 +304,34 @@
             <div class="suspect-frame"><div class="sprite" data-sprite="blue" aria-hidden="true"></div></div>
             <h3 class="suspect-name">Codex</h3>
             <p class="suspect-note">sessions and its own line</p>
+            <p class="suspect-alibi">Only the sessions folder. I am on my own line, not the plate.</p>
           </div>
         </li>
       </ul>
+    </div>
+  </section>
+
+  <section data-reveal class="how-band" id="how" aria-labelledby="h-how">
+    <div class="page-wrap">
+      <h2 class="band-title" id="h-how">Case notes: how it works</h2>
+      <p class="band-intro">Three steps. All on your machine.</p>
+      <div class="how-machine">
+        <span class="how-boundary">on this machine only</span>
+        <ol class="how-flow">
+          <li class="how-step">
+            <h3>Sources</h3>
+            <p>T3 Code, Claude Code and Codex. Read only state, metadata only. No writes, no message text.</p>
+          </li>
+          <li class="how-step">
+            <h3>Binary</h3>
+            <p>One Rust binary reads the sources and builds the page. Nothing else to install.</p>
+          </li>
+          <li class="how-step">
+            <h3>Browser</h3>
+            <p>One page at 127.0.0.1. No outside requests, no cookies, nothing leaves the machine.</p>
+          </li>
+        </ol>
+      </div>
     </div>
   </section>
 
