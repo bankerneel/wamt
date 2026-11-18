@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use crate::agg::{Bucket, BUCKET_MS};
 use crate::payload::Shared;
 use crate::t3::T3;
-use crate::timeutil::{day_of, day_start_ms, MS_PER_HOUR};
+use crate::timeutil::{civil_from_days, day_label, day_of, day_start_ms, days_from_civil, MS_PER_HOUR};
 
 const MAX_ID: usize = 160;
 
@@ -47,6 +47,46 @@ pub fn id_from_query(q: &str) -> Option<String> {
     valid_id(&id).then_some(id)
 }
 
+/// Parses a strict `YYYY-MM-DD` local calendar date into a day number.
+/// Rejects short or padded fields, separators other than dashes and dates
+/// that do not exist (including 29 February in non-leap years).
+pub fn parse_day(s: &str) -> Option<i32> {
+    let b = s.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let num = |a: usize, z: usize| -> Option<i64> {
+        if !b[a..z].iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        s[a..z].parse().ok()
+    };
+    let (y, m, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let day = days_from_civil(y, m, d);
+    let (y2, m2, d2) = civil_from_days(day);
+    if (y2 as i64, m2 as i64, d2 as i64) != (y, m, d) {
+        return None;
+    }
+    Some(day as i32)
+}
+
+/// Only the last seven local days (today and the six before it) can be
+/// drilled into. Anything older, or in the future, is refused.
+pub fn day_in_range(day: i32, now: i64, off: i32) -> bool {
+    let today = day_of(now, off);
+    (today - 6..=today).contains(&day)
+}
+
+/// The optional `day` of a query string: `Ok(None)` when absent,
+/// `Ok(Some(day))` when strictly formatted, `Err(())` when malformed.
+/// The range against "now" is checked later, where the offset is known.
+pub fn day_from_query(q: &str) -> Result<Option<i32>, ()> {
+    let Some(raw) = q.split('&').find_map(|kv| kv.strip_prefix("day=")) else {
+        return Ok(None);
+    };
+    parse_day(&pct_decode(raw).ok_or(())?).map(Some).ok_or(())
+}
+
 /// Merges the buckets of several sessions into one timeline.
 pub fn merge_buckets<'a>(sets: impl Iterator<Item = &'a std::collections::BTreeMap<u16, Bucket>>) -> std::collections::BTreeMap<u16, Bucket> {
     let mut out: std::collections::BTreeMap<u16, Bucket> = Default::default();
@@ -64,31 +104,58 @@ pub fn merge_buckets<'a>(sets: impl Iterator<Item = &'a std::collections::BTreeM
 
 pub enum DrillErr {
     NotFound,
+    BadDay,
     Unavailable,
     Db,
 }
 
-/// The JSON body for one thread. Opens its own short-lived read-only
-/// connection (dropped on return) so the T3 worker's connection and its
-/// read transactions are never shared across threads.
-pub fn build(shared: &Mutex<Shared>, db: &Path, id: &str, now: i64) -> Result<String, DrillErr> {
-    let (off, meta, nsess, buckets) = {
+/// The JSON body for one thread, optionally for a past local day. Opens its
+/// own short-lived read-only connection (dropped on return) so the T3
+/// worker's connection and its read transactions are never shared across
+/// threads. The shared state is locked only while copying in-memory numbers;
+/// every SQLite read happens after the lock is released.
+pub fn build(shared: &Mutex<Shared>, db: &Path, id: &str, now: i64, day: Option<i32>) -> Result<String, DrillErr> {
+    let (off, live_meta, nsess, buckets, target, today) = {
         let sh = shared.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(t3) = sh.t3.as_ref() else { return Err(DrillErr::Unavailable) };
-        let Some(m) = t3.threads.get(id) else { return Err(DrillErr::NotFound) };
         let today = day_of(now, sh.off);
+        let target = day.unwrap_or(today);
+        if !day_in_range(target, now, sh.off) {
+            return Err(DrillErr::BadDay);
+        }
+        let Some(t3) = sh.t3.as_ref() else { return Err(DrillErr::Unavailable) };
         let sids: Vec<&String> = t3.sessions.iter().filter(|(_, th)| th.as_str() == id).map(|(s, _)| s).collect();
-        let day = sh.tx.days.iter().find(|(d, _)| *d == today).map(|(_, a)| a);
-        let sets = sids.iter().filter_map(|s| day.and_then(|a| a.sessions.get(*s))).map(|s| &s.buckets);
-        (sh.off, m.clone(), sids.len(), merge_buckets(sets))
+        // Buckets are kept for today only; merge them while the borrowed
+        // day aggregate is still alive, into an owned map.
+        let buckets = if target == today {
+            let day = sh.tx.days.iter().find(|(d, _)| *d == today).map(|(_, a)| a);
+            let sets = sids.iter().filter_map(|s| day.and_then(|a| a.sessions.get(*s))).map(|s| &s.buckets);
+            merge_buckets(sets)
+        } else {
+            Default::default()
+        };
+        (sh.off, t3.threads.get(id).cloned(), sids.len(), buckets, target, today)
     };
-    let start = day_start_ms(day_of(now, off), off);
-    let detail = {
+    let start = day_start_ms(target, off);
+    let (detail, db_meta) = {
         let t3 = T3::open(db).map_err(|_| DrillErr::Db)?;
         t3.begin().map_err(|_| DrillErr::Db)?;
+        // Metadata is read from SQLite, not from the live board: a thread
+        // idle for hours may no longer be listed there.
+        let meta = t3.thread_meta(id).map_err(|_| DrillErr::Db)?;
         let d = t3.thread_detail(id, start, start + 24 * MS_PER_HOUR);
         t3.end();
-        d.map_err(|_| DrillErr::Db)?
+        (d.map_err(|_| DrillErr::Db)?, meta)
+    };
+    if db_meta.is_none() && live_meta.is_none() && detail.runs.is_empty() && detail.tools.is_empty() && detail.items.is_empty() && detail.subs.is_empty() {
+        return Err(DrillErr::NotFound);
+    }
+    // Prefer the database row; fall back to the live board, then to the id.
+    let (title, project, model) = match db_meta {
+        Some((title, project, model)) => (title, project, model),
+        None => match live_meta {
+            Some(m) => (m.title, m.project, m.model),
+            None => (id.to_string(), None, None),
+        },
     };
     let runs: Vec<_> = detail
         .runs
@@ -97,7 +164,7 @@ pub fn build(shared: &Mutex<Shared>, db: &Path, id: &str, now: i64) -> Result<St
             let begin = r.started.unwrap_or(r.requested);
             let ms = match (r.started, r.completed) {
                 (Some(a), Some(b)) if b > a => Some(b - a),
-                (Some(a), None) if matches!(r.status.as_str(), "running" | "waiting") => Some((now - a).max(0)),
+                (Some(a), None) if matches!(r.status.as_str(), "running" | "waiting") && target == today => Some((now - a).max(0)),
                 _ => None,
             };
             json!({"n": r.n, "status": r.status, "at": begin, "ms": ms, "model": r.model, "delegated": r.delegated})
@@ -117,10 +184,13 @@ pub fn build(shared: &Mutex<Shared>, db: &Path, id: &str, now: i64) -> Result<St
     let tl: Vec<_> = buckets.iter().map(|(slot, b)| json!({"t": start + *slot as i64 * BUCKET_MS, "w": b.w, "out": b.out})).collect();
     let body = json!({
         "id": id,
-        "title": meta.title,
-        "project": meta.project,
-        "model": meta.model,
+        "title": title,
+        "project": project,
+        "model": model,
         "now": now,
+        "day": day_label(target),
+        "today": day_label(today),
+        "is_today": target == today,
         "day_start": start,
         "runs": runs,
         "tools": detail.tools.iter().map(|(n, c)| json!({"name": n, "n": c})).collect::<Vec<_>>(),
@@ -134,6 +204,41 @@ pub fn build(shared: &Mutex<Shared>, db: &Path, id: &str, now: i64) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::timeutil::parse_ts_ms;
+
+    #[test]
+    fn days_are_parsed_strictly() {
+        assert_eq!(parse_day("2026-11-18"), Some(days_from_civil(2026, 11, 18) as i32));
+        assert_eq!(parse_day("2024-02-29"), Some(days_from_civil(2024, 2, 29) as i32));
+        for bad in [
+            "", "2026-11-18T00", "2026-1-18", "2026-11-8", "2026-13-01", "2026-00-10",
+            "2026-11-00", "2026-02-30", "2023-02-29", "2026/11/18", "2026-11-18 ",
+            " 2026-11-18", "abcdefghij", "2026-11-1x",
+        ] {
+            assert_eq!(parse_day(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn day_query_is_decoded_then_range_checked() {
+        let day = parse_day("2026-11-18").unwrap();
+        assert_eq!(day_from_query("day=2026-11-18"), Ok(Some(day)));
+        assert_eq!(day_from_query("id=mcp%3Aabc&day=2026%2D11%2D18"), Ok(Some(day)));
+        assert_eq!(day_from_query("id=mcp:abc"), Ok(None));
+        assert_eq!(day_from_query(""), Ok(None));
+        for bad in ["day=", "day=2026-13-01", "day=2026-11-18x", "day=%zz", "day=2026%2F11%2F18"] {
+            assert!(day_from_query(bad).is_err(), "{bad}");
+        }
+        let now = parse_ts_ms("2026-11-18T12:00:00Z").unwrap();
+        assert!(day_in_range(day, now, 0));
+        assert!(day_in_range(parse_day("2026-11-12").unwrap(), now, 0));
+        assert!(!day_in_range(parse_day("2026-11-11").unwrap(), now, 0));
+        assert!(!day_in_range(parse_day("2026-11-19").unwrap(), now, 0));
+        // An offset shifts which local day an instant belongs to.
+        let later = parse_ts_ms("2026-11-18T20:00:00Z").unwrap();
+        assert!(day_in_range(parse_day("2026-11-19").unwrap(), later, 330));
+        assert!(!day_in_range(parse_day("2026-11-12").unwrap(), later, 330));
+    }
 
     #[test]
     fn ids_are_validated_strictly() {

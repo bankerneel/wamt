@@ -671,7 +671,10 @@ struct PrOut<'a> {
     draft: bool,
     checks: Option<&'a str>,
     review: Option<&'a str>,
+    /// The thread title, for the "Threads" column.
     thread: &'a str,
+    /// The thread id, so a PR row can open that thread's drill-down.
+    thread_id: &'a str,
     linked: i64,
 }
 
@@ -1116,6 +1119,7 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
                         checks: p.checks.as_deref(),
                         review: p.review.as_deref(),
                         thread: &th.title,
+                        thread_id: &th.id,
                         linked: p.linked,
                     });
                 }
@@ -1188,6 +1192,27 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pr_out_carries_the_thread_id() {
+        // The PR table used to carry only the title, so it could not open the
+        // drill-down. The id must survive serialisation under a known key.
+        let pr = PrOut {
+            n: 7,
+            repo: "o/r",
+            title: Some("Fix"),
+            state: Some("open"),
+            draft: false,
+            checks: None,
+            review: None,
+            thread: "Backend",
+            thread_id: "thread:subagent:0000000000000b01",
+            linked: 0,
+        };
+        let v = serde_json::to_value(&pr).unwrap();
+        assert_eq!(v["thread"], "Backend");
+        assert_eq!(v["thread_id"], "thread:subagent:0000000000000b01");
+    }
 
     #[test]
     fn recent_by_thread_counts_buckets_overlapping_30_minutes() {
