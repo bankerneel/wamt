@@ -15,10 +15,9 @@ import zlib from 'node:zlib';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const HERE = path.dirname(pathToFileURL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1'));
-const DEFAULT_SITE = path.resolve(HERE, '..');
+const DEFAULT_SITE = fileURLToPath(new URL('../', import.meta.url));
 const DEFAULT_OUT = 'D:/Projects/wamt/hq/assets/landing/screens';
 const DEFAULT_DEPS = path.join(os.tmpdir(), 'wamt-landing-check-deps');
 const VIEWPORTS = [
@@ -57,6 +56,7 @@ function usage() {
     '  --out DIR          Screenshot output directory (default ' + DEFAULT_OUT + ')',
     '  --site DIR         Built site root (default the parent of tests/)',
     '  --deps DIR         Temp prefix for playwright/lighthouse (default ' + DEFAULT_DEPS + ')',
+    '  --chrome FILE      Use an installed Chrome instead of downloading Chromium',
     '  --mid-scroll N     Force the scroll Y used for the mid-bite screenshot',
     '  --lh-json FILE     Save the full Lighthouse LHR as JSON here',
     '  --no-lighthouse    Skip the Lighthouse pass (faster local validation)',
@@ -82,6 +82,7 @@ if (ARGS._flags.has('help')) {
 const SITE_ROOT = path.resolve(String(ARGS.site || DEFAULT_SITE));
 const OUT_DIR = path.resolve(String(ARGS.out || DEFAULT_OUT));
 const DEPS_ROOT = path.resolve(String(ARGS.deps || DEFAULT_DEPS));
+const CHROME = ARGS.chrome && path.resolve(String(ARGS.chrome));
 const BROWSERS_PATH = path.join(DEPS_ROOT, 'browsers');
 const MID_SCROLL = ARGS['mid-scroll'] != null ? Number(ARGS['mid-scroll']) : null;
 const LH_JSON = ARGS['lh-json'] ? String(ARGS['lh-json']) : null;
@@ -132,18 +133,18 @@ function ensureDeps() {
     if (r.status !== 0) throw new Error('temp tooling install failed with status ' + r.status);
   }
   const pw = req('playwright');
-  const exe = pw.chromium.executablePath();
+  const exe = CHROME || pw.chromium.executablePath();
+  if (CHROME && !fs.existsSync(CHROME)) throw new Error('Chrome executable not found: ' + CHROME);
   if (!fs.existsSync(exe)) {
     log('installing chromium into', BROWSERS_PATH);
-    const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    const r = spawnSync(npx, ['--yes', 'playwright', 'install', 'chromium'], {
+    const cli = path.join(path.dirname(req.resolve('playwright/package.json')), 'cli.js');
+    const r = spawnSync(process.execPath, [cli, 'install', 'chromium'], {
       stdio: 'inherit',
-      shell: process.platform === 'win32',
       env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: BROWSERS_PATH }
     });
     if (r.status !== 0) throw new Error('chromium install failed with status ' + r.status);
   }
-  return { req, chromium: pw.chromium, chromiumExe: pw.chromium.executablePath() };
+  return { req, chromium: pw.chromium, chromiumExe: exe };
 }
 
 const MIME = {
@@ -162,23 +163,40 @@ const MIME = {
 };
 
 function startServer(root) {
+  const configPath = path.join(root, 'vercel.json');
+  const rules = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')).headers || [] : [];
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       let pathname;
       try { pathname = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname); }
       catch { res.writeHead(400); res.end('bad request'); return; }
       if (pathname === '/') pathname = '/index.html';
+      if (pathname.split(/[\\/]/).some((part) => part.startsWith('.')) || pathname.startsWith('/tests/')) {
+        res.writeHead(404); res.end('not found'); return;
+      }
       const file = path.resolve(root, '.' + pathname);
       if (!file.startsWith(root + path.sep) && file !== path.join(root, 'index.html')) {
         res.writeHead(403); res.end('forbidden'); return;
       }
       fs.readFile(file, (err, data) => {
         if (err) { res.writeHead(404); res.end('not found'); return; }
-        res.writeHead(200, {
-          'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+        const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+        const headers = {
+          'Content-Type': type,
           'Cache-Control': 'no-store',
           'X-Content-Type-Options': 'nosniff'
-        });
+        };
+        for (const rule of rules) {
+          const prefix = rule.source.replace(/\(\.\*\)$/, '');
+          if (!pathname.startsWith(prefix)) continue;
+          for (const header of rule.headers) headers[header.key] = header.value;
+        }
+        if (type.startsWith('text/') && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+          data = zlib.gzipSync(data);
+          headers['Content-Encoding'] = 'gzip';
+          headers.Vary = 'Accept-Encoding';
+        }
+        res.writeHead(200, { ...headers, 'Content-Length': data.length });
         res.end(data);
       });
     });
@@ -190,18 +208,15 @@ function startServer(root) {
 }
 
 async function settle(page) {
-  try {
-    await page.evaluate(async () => {
-      if (document.fonts && document.fonts.ready) await document.fonts.ready;
-      const imgs = Array.from(document.images || []);
-      await Promise.all(imgs.map((img) => img.complete ? Promise.resolve() : new Promise((done) => {
-        img.addEventListener('load', done, { once: true });
-        img.addEventListener('error', done, { once: true });
-      })));
-      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    const visible = [...document.images].filter((img) => {
+      const bounds = img.getBoundingClientRect();
+      return bounds.width > 0 && bounds.bottom > 0 && bounds.top < innerHeight;
     });
-  } catch { /* JS disabled or navigation raced, tolerable */ }
-  await page.waitForTimeout(200);
+    await Promise.all(visible.map((img) => img.decode()));
+  });
 }
 
 async function goto(page, url) {
@@ -210,23 +225,23 @@ async function goto(page, url) {
 }
 
 async function scrollY(page, y) {
-  await page.evaluate((v) => window.scrollTo(0, v), Math.max(0, Math.round(y)));
+  await page.evaluate((top) => window.scrollTo({ top, behavior: 'instant' }), Math.max(0, Math.round(y)));
   await settle(page);
 }
 
 async function scrollToSelector(page, selector) {
   await page.evaluate((sel) => {
     const el = document.querySelector(sel);
-    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', behavior: 'auto' });
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', behavior: 'instant' });
   }, selector);
   await settle(page);
 }
 
 async function findMidScroll(page) {
   if (MID_SCROLL != null && Number.isFinite(MID_SCROLL)) return MID_SCROLL;
-  const beats = await page.$$('[data-beat]');
+  const beats = await page.$$('[data-beat="3"], [data-beat="4"], [data-beat="5"]');
   for (const beat of beats) {
-    for (const frac of [0.2, 0.45, 0.7]) {
+    for (const frac of [0.52, 0.55, 0.48]) {
       const y = await beat.evaluate((el, f) => {
         const r = el.getBoundingClientRect();
         return window.scrollY + r.top - window.innerHeight * f;
@@ -237,21 +252,14 @@ async function findMidScroll(page) {
         if (!stage) return false;
         const r = stage.getBoundingClientRect();
         if (!(r.top < window.innerHeight && r.bottom > 0)) return false;
-        const sprites = Array.from(document.querySelectorAll('.sprite[data-sprite][data-frame]'));
-        return sprites.some((s) => {
-          const n = Number(s.dataset.frame);
-          if (!Number.isFinite(n)) return false;
-          if (s.dataset.sprite === 'cookie') return n >= 1 && n <= 6;
-          return n >= 4 && n <= 9;
-        });
-      }).catch(() => false);
+        const cookie = Number(stage.querySelector('[data-sprite="cookie"]').dataset.frame);
+        const chomp = Number(stage.dataset.biteFrame);
+        return cookie >= 1 && cookie <= 6 && chomp >= 4 && chomp <= 9;
+      });
       if (ok) return Math.max(0, Math.round(y));
     }
   }
-  return page.evaluate(() => {
-    const el = document.querySelector('#live') || document.querySelector('[data-beat="2"]');
-    return el ? Math.max(0, window.scrollY + el.getBoundingClientRect().top) : 0;
-  });
+  throw new Error('Could not find a visible bite in progress. Use --mid-scroll to set the capture offset.');
 }
 
 async function main() {
@@ -339,6 +347,7 @@ async function main() {
   try {
     browser = await tooling.chromium.launch({
       headless: true,
+      executablePath: tooling.chromiumExe,
       args: ['--no-sandbox', '--disable-background-networking', '--disable-default-apps']
     });
 
@@ -369,15 +378,23 @@ async function main() {
               await scrollToSelector(page, '#' + point);
             }
             await settle(page);
-            const name = vp.name + '-' + theme + '-' + point + '.png';
+            const name = vp.width + '-' + theme + '-' + (point === 'install' ? 'finale' : point) + '.png';
             const file = path.join(OUT_DIR, name);
             if (point === 'evidence') {
               const el = await page.$('#evidence');
-              if (el) await el.screenshot({ path: file });
+              if (el) {
+                await el.$$eval('img', async (images) => {
+                  for (const image of images) image.loading = 'eager';
+                  await Promise.all(images.map((image) => image.decode()));
+                });
+                await el.screenshot({ path: file });
+              }
               else {
                 await page.screenshot({ path: file });
                 notes.push('missing #evidence, used viewport capture for ' + name);
               }
+            } else if (point === 'install' || point === 'suspects') {
+              await page.locator('#' + point).screenshot({ path: file });
             } else {
               await page.screenshot({ path: file });
             }
@@ -394,8 +411,8 @@ async function main() {
     log('screenshot matrix captured, starting reduced-motion finale');
     {
       const ctx = await browser.newContext({
-        viewport: { width: 1440, height: 900 },
-        colorScheme: 'light',
+        viewport: { width: 390, height: 844 },
+        colorScheme: 'dark',
         reducedMotion: 'reduce',
         deviceScaleFactor: 1
       });
@@ -403,13 +420,9 @@ async function main() {
         const page = await ctx.newPage();
         makeMonitors(page, 'shot-reduced-motion');
         await goto(page, url);
-        await page.evaluate(() => {
-          const el = document.querySelector('.scene[data-scene="finale"]') || document.querySelector('#install');
-          if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', behavior: 'auto' });
-        });
-        await settle(page);
-        const file = path.join(OUT_DIR, 'reduced-motion-finale.png');
-        await page.screenshot({ path: file });
+        await scrollToSelector(page, '#install');
+        const file = path.join(OUT_DIR, '390-dark-reduced-finale.png');
+        await page.locator('#install').screenshot({ path: file });
         screenshots.push(file);
       } finally {
         await ctx.close();
@@ -455,7 +468,8 @@ async function main() {
     });
 
     await check('gzipped source budget', async () => {
-      const files = walk(SITE_ROOT).filter((f) => /\.(js|css|html)$/i.test(f));
+      const files = walk(SITE_ROOT).filter((f) => /\.(js|css|html)$/i.test(f) &&
+        !path.relative(SITE_ROOT, f).split(path.sep).some((part) => part.startsWith('.') || part === 'tests'));
       let raw = 0;
       let gz = 0;
       let jsGz = 0;
@@ -620,17 +634,12 @@ async function main() {
       makeMonitors(page, 'suspects');
       await goto(page, url);
       await scrollToSelector(page, '#suspects');
-      const suspect = await page.$('#suspects [data-frame]');
-      assert(suspect, 'no suspect with data-frame under #suspects');
-      const before = await suspect.getAttribute('data-frame');
-      await suspect.hover();
+      const suspect = page.locator('#suspects [data-suspect]').first();
+      const sprite = suspect.locator('[data-frame]');
+      const before = await sprite.getAttribute('data-frame');
+      await suspect.focus();
       await settle(page);
-      let after = await suspect.getAttribute('data-frame');
-      if (after === before) {
-        await suspect.focus();
-        await settle(page);
-        after = await suspect.getAttribute('data-frame');
-      }
+      const after = await sprite.getAttribute('data-frame');
       assert.notEqual(after, before, 'suspect data-frame did not change (before ' + before + ')');
       await page.close();
       return 'frame ' + before + ' -> ' + after;
@@ -681,12 +690,18 @@ async function main() {
       assert(icon, 'no favicon link');
       assert(/\.(svg|png|ico)(\?|$)/i.test(icon), 'favicon is not an image: ' + icon);
       assert(title && title.length > 0, 'empty document title');
-      const source = walk(SITE_ROOT).filter((f) => /\.(js|html)$/i.test(f))
-        .map((f) => fs.readFileSync(f, 'utf8')).join('\n');
-      const hasHiddenTitle = source.includes('there is still cookie left');
+      const backgroundTitle = await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        const title = document.title;
+        delete document.hidden;
+        document.dispatchEvent(new Event('visibilitychange'));
+        return { title, restored: document.title };
+      });
+      assert.equal(backgroundTitle.title, 'there is still cookie left');
+      assert.equal(backgroundTitle.restored, title);
       await page.close();
-      if (!hasHiddenTitle) return { skip: true, detail: 'favicon+title ok, hidden-title hook not found in source' };
-      return 'favicon=' + icon + ', title present, hidden-title hook present';
+      return 'favicon=' + icon + ', title swaps and restores on a simulated visibility change';
     });
 
     await check('horizontal overscroll at 320, 390, 768, 1440', async () => {
@@ -707,8 +722,9 @@ async function main() {
       return report.join(', ');
     });
 
-    await check('no console errors or page errors', async () => {
+    await check('no console warnings, errors or page errors', async () => {
       assert.equal(consoleErrors.length, 0, 'console errors: ' + consoleErrors.slice(0, 5).join(' | '));
+      assert.equal(consoleWarnings.length, 0, 'console warnings: ' + consoleWarnings.slice(0, 5).join(' | '));
       assert.equal(pageErrors.length, 0, 'page errors: ' + pageErrors.slice(0, 5).join(' | '));
       return 'errors=0, pageErrors=0, warnings=' + consoleWarnings.length;
     });
@@ -807,10 +823,9 @@ async function main() {
         const clPath = tooling.req.resolve('chrome-launcher');
         const lighthouse = (await import(pathToFileURL(lhPath).href)).default;
         const chromeLauncher = await import(pathToFileURL(clPath).href);
-        const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'wamt-lh-profile-'));
         const chrome = await chromeLauncher.launch({
           chromePath: tooling.chromiumExe,
-          chromeFlags: ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-background-networking', '--disable-sync', '--user-data-dir=' + profile],
+          chromeFlags: ['--headless=new', '--disable-gpu', '--disable-background-networking', '--disable-sync'],
           logLevel: 'error'
         });
         try {
@@ -858,7 +873,6 @@ async function main() {
         } finally {
           const killed = chrome.kill();
           if (killed && typeof killed.catch === 'function') await killed.catch(() => {});
-          fs.rmSync(profile, { recursive: true, force: true });
         }
       });
     }
