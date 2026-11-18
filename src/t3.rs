@@ -958,6 +958,27 @@ mod tests {
     }
 
     #[test]
+    fn events_since_pages_match_a_single_call() {
+        // The startup feed backfill reads history in bounded pages. Paging by
+        // `sequence > from` must return exactly the same rows, in order, as
+        // one large query, or the feed would change.
+        let p = fixture("pages", false);
+        let mut one = T3::open(&p).unwrap();
+        let all = one.events_since(0, 100).unwrap();
+        let mut paged_db = T3::open(&p).unwrap();
+        let mut paged = Vec::new();
+        let mut from = 0;
+        loop {
+            let batch = paged_db.events_since(from, 1).unwrap();
+            let Some(last) = batch.last() else { break };
+            from = last.seq;
+            paged.extend(batch);
+        }
+        assert_eq!(all.len(), 2);
+        assert_eq!(all.iter().map(|e| e.seq).collect::<Vec<_>>(), paged.iter().map(|e| e.seq).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn events_since_advances() {
         let mut t = T3::open(&fixture("events", false)).unwrap();
         let ev = t.events_since(0, 100).unwrap();

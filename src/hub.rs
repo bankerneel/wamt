@@ -7,6 +7,23 @@ use std::time::Duration;
 
 const FEED_KEEP: usize = 400;
 
+/// Cheap 64-bit FNV-1a over the payload bytes. Used only as a filter before
+/// deciding a freshly composed payload is byte-identical to the stored one.
+fn json_hash(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in s.as_bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+/// Length plus hash; collisions at 64 bits are negligible for this use, and a
+/// false positive would only hold back one harmless refresh.
+fn same_json(a: &str, b: &str) -> bool {
+    a.len() == b.len() && json_hash(a) == json_hash(b)
+}
+
 #[derive(Default)]
 struct State {
     live: Arc<String>,
@@ -90,13 +107,22 @@ impl Hub {
         self.set_live_at(json, i64::MAX);
     }
 
-    /// Stores a live payload composed at `at`, unless a newer one is stored.
+    /// Stores a live payload composed at `at`, unless a newer one is stored
+    /// or the bytes are unchanged (in which case no client is woken).
     pub fn set_live_at(&self, json: String, at: i64) {
         let mut s = self.st.lock().unwrap();
-        if at != i64::MAX {
-            if at < s.live_at {
-                return;
+        if at != i64::MAX && at < s.live_at {
+            return;
+        }
+        if same_json(&json, &s.live) {
+            // Identical bytes: keep the existing Arc and version. Still move
+            // the timestamp forward so an older payload cannot slip in later.
+            if at != i64::MAX {
+                s.live_at = at;
             }
+            return;
+        }
+        if at != i64::MAX {
             s.live_at = at;
         }
         s.live = Arc::new(json);
@@ -106,10 +132,16 @@ impl Hub {
 
     pub fn set_days_at(&self, json: String, at: i64) {
         let mut s = self.st.lock().unwrap();
-        if at != i64::MAX {
-            if at < s.days_at {
-                return;
+        if at != i64::MAX && at < s.days_at {
+            return;
+        }
+        if same_json(&json, &s.days) {
+            if at != i64::MAX {
+                s.days_at = at;
             }
+            return;
+        }
+        if at != i64::MAX {
             s.days_at = at;
         }
         s.days = Arc::new(json);
@@ -197,6 +229,23 @@ mod tests {
             assert!(!h.take_stale());
         }
         assert!(h.idle());
+    }
+
+    #[test]
+    fn identical_json_does_not_bump_version() {
+        let h = Hub::new();
+        h.set_live_at("{\"a\":1}".into(), 100);
+        let before = h.snapshot().1.live;
+        h.set_live_at("{\"a\":1}".into(), 200);
+        assert_eq!(h.snapshot().1.live, before, "identical live JSON must not bump the version");
+        // A genuinely different payload still bumps exactly once.
+        h.set_live_at("{\"a\":2}".into(), 300);
+        assert_eq!(h.snapshot().1.live, before + 1);
+        // Same rule for the days payload.
+        h.set_days_at("{\"d\":1}".into(), 100);
+        let dbefore = h.snapshot().1.days;
+        h.set_days_at("{\"d\":1}".into(), 200);
+        assert_eq!(h.snapshot().1.days, dbefore, "identical days JSON must not bump the version");
     }
 
     #[test]

@@ -212,19 +212,31 @@ fn run_t3(t3: &mut t3::T3, cache_path: &PathBuf, shared: &Arc<Mutex<Shared>>, hu
         cache_dirty = true;
     }
 
-    // Seed the feed from recent history.
-    let mut feed = FeedBuilder::default();
-    t3.begin()?;
+    // Seed the feed from recent history in bounded pages. One 6000-row query
+    // materialised thousands of short-lived row Strings at once; even after
+    // they were freed, the small pages they touched stayed dirty and charged
+    // to the process. Small pages reuse the same blocks instead.
     let max = t3.max_seq()?;
-    let seed = t3.events_since((max - 6000).max(0), 6000)?;
-    t3.end();
-    let items: Vec<(String, String)> = seed
-        .iter()
-        .filter_map(|ev| feed.on_event(ev, &t3.threads))
-        .map(|it| (it.id.clone(), serde_json::to_string(&it).unwrap_or_default()))
-        .collect();
-    hub.push_feed(items);
-    let mut last_event_ms = seed.last().map(|e| e.ts).unwrap_or(0);
+    let mut feed = FeedBuilder::default();
+    let mut last_event_ms = 0;
+    let mut from = (max - 6000).max(0);
+    while from < max {
+        t3.begin()?;
+        let batch = t3.events_since(from, 400)?;
+        t3.end();
+        let Some(last) = batch.last() else { break };
+        // events_since selects `sequence > from`, so the lower bound is
+        // exclusive and the next page starts at the last row we just saw.
+        let next = last.seq;
+        let items: Vec<(String, String)> = batch
+            .iter()
+            .filter_map(|ev| feed.on_event(ev, &t3.threads))
+            .map(|it| (it.id.clone(), serde_json::to_string(&it).unwrap_or_default()))
+            .collect();
+        hub.push_feed(items);
+        last_event_ms = last.ts;
+        from = next;
+    }
 
     let mut threads_arc = Arc::new(t3.threads.clone());
     let mut sessions_arc = Arc::new(t3.session_thread.clone());

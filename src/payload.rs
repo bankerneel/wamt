@@ -80,6 +80,21 @@ pub struct WeekPart {
     pub info: WeekInfo,
 }
 
+// Serialization write buffers. `to_writer` grows a Vec by doubling and frees
+// that chain on every call; keeping one buffer per worker thread and clearing
+// it instead makes the allocator see a single stable size. The tail and T3
+// workers (which compose most often) are long-lived, so their buffers persist.
+thread_local! {
+    static LIVE_BUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(Vec::new());
+    static DAYS_BUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(Vec::new());
+}
+
+/// Copies a write buffer into an exactly sized String for the hub's Arc.
+/// serde_json emits UTF-8 only, so the validation and fallback never trigger.
+fn json_string(buf: &[u8]) -> String {
+    String::from_utf8(buf.to_vec()).unwrap_or_else(|_| "{}".into())
+}
+
 fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
@@ -630,7 +645,15 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
         notetaker: note,
         codex_limit: sh.tx.codex_limit.as_ref(),
     };
-    serde_json::to_string(&live).unwrap_or_else(|_| "{}".into())
+    LIVE_BUF.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        buf.clear();
+        if serde_json::to_writer(&mut *buf, &live).is_err() {
+            buf.clear();
+            buf.extend_from_slice(b"{}");
+        }
+        json_string(&buf)
+    })
 }
 
 // ---------------------------------------------------------------- days
@@ -1182,12 +1205,38 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
             }
         }
     }
-    serde_json::to_string(&Days { now, days, week: &sh.tx.week.days, week_info: &sh.tx.week.info, prices }).unwrap_or_else(|_| "{}".into())
+    let doc = Days { now, days, week: &sh.tx.week.days, week_info: &sh.tx.week.info, prices };
+    DAYS_BUF.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        buf.clear();
+        if serde_json::to_writer(&mut *buf, &doc).is_err() {
+            buf.clear();
+            buf.extend_from_slice(b"{}");
+        }
+        json_string(&buf)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compose_live_reuses_buffer_and_emits_stable_json() {
+        let mut sh = Shared::new(0);
+        let a = compose_live(&mut sh, 1_700_000_000_000);
+        let v: serde_json::Value = serde_json::from_str(&a).unwrap();
+        for k in ["now", "off", "health", "today", "window", "spark", "threads", "subs", "outside"] {
+            assert!(v.get(k).is_some(), "missing key {k}");
+        }
+        // A second call clears and reuses the same write buffer; output stays valid.
+        let b = compose_live(&mut sh, 1_700_000_000_001);
+        let v2: serde_json::Value = serde_json::from_str(&b).unwrap();
+        assert_eq!(v2["now"], 1_700_000_000_001i64);
+        for k in ["t3", "tx_ready", "seq", "uptime"] {
+            assert_eq!(v["health"][k], v2["health"][k], "health key {k} changed");
+        }
+    }
 
     #[test]
     fn recent_by_thread_counts_buckets_overlapping_30_minutes() {
