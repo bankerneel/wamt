@@ -16,6 +16,7 @@ use std::time::Duration;
 use crate::hub::{Hub, Seen};
 use crate::drill;
 use crate::payload::Shared;
+use crate::timeline;
 use crate::timeutil::now_ms;
 use std::sync::Mutex;
 
@@ -196,6 +197,20 @@ impl Server {
                     Err(drill::DrillErr::Db) => respond(&mut s, "500 Internal Server Error", "text/plain", b"cannot read thread", head),
                 };
             }
+            "/api/timeline" => {
+                let day = match timeline::day_from_timeline_query(&req.query) {
+                    Ok(day) => day,
+                    Err(()) => {
+                        let _ = respond(&mut s, "400 Bad Request", "text/plain", b"bad day", head);
+                        return;
+                    }
+                };
+                let _ = match timeline::build(&self.shared, &self.t3_db, now_ms(), day) {
+                    Ok(body) => respond(&mut s, "200 OK", "application/json", body.as_bytes(), head),
+                    Err(timeline::TimelineErr::BadDay) => respond(&mut s, "400 Bad Request", "text/plain", b"day outside the last seven days", head),
+                    Err(timeline::TimelineErr::Db) => respond(&mut s, "500 Internal Server Error", "text/plain", b"cannot read the day timeline", head),
+                };
+            }
             "/healthz" => {
                 let _ = respond(&mut s, "200 OK", "text/plain", b"ok", head);
             }
@@ -356,6 +371,13 @@ mod tests {
         ] {
             assert!(get(port, bad, &h).starts_with("HTTP/1.1 400"), "{bad}");
         }
+        // Day timeline: the day is required, strict and range-checked. The
+        // test server has no database, so a good day reaches the read and 500s.
+        for bad in ["/api/timeline", "/api/timeline?day=", "/api/timeline?day=2026-13-01", "/api/timeline?day=2026-02-30", "/api/timeline?day=1999-01-01"] {
+            assert!(get(port, bad, &h).starts_with("HTTP/1.1 400"), "{bad}");
+        }
+        assert!(get(port, &format!("/api/timeline?day={today}"), &h).starts_with("HTTP/1.1 500"));
+        assert!(get(port, "/api/timeline?day=2026-11-18", "evil.example:80").starts_with("HTTP/1.1 403"));
         assert!(get(port, "/api/thread?id=mcp:abc", "evil.example:80").starts_with("HTTP/1.1 403"));
         assert!(get(port, "/", "evil.example:80").starts_with("HTTP/1.1 403"));
         assert!(get(port, "/", &format!("localhost:{port}")).contains("<title>t</title>"));

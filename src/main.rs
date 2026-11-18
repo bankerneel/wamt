@@ -14,6 +14,7 @@ mod state;
 mod sys;
 mod t3;
 mod tail;
+mod timeline;
 mod timeutil;
 mod transcript;
 

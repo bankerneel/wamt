@@ -163,6 +163,43 @@ pub struct Waiting {
     pub since: i64,
 }
 
+/// One run of a thread as a bar on the day timeline. Times are clamped to the
+/// requested day, and `to` is `now` for a still-open run.
+#[derive(Clone, Debug, Serialize)]
+pub struct TimelineRun {
+    pub n: i64,
+    pub status: String,
+    pub at: i64,
+    pub to: i64,
+    pub model: Option<String>,
+}
+
+/// A hatched period where a thread waited on the user: an approval or link
+/// request, or a run whose status is "waiting".
+#[derive(Clone, Debug, Serialize)]
+pub struct TimelineWait {
+    pub at: i64,
+    pub to: i64,
+    pub kind: &'static str,
+}
+
+/// One T3 thread's lane for a day. Only ids, titles, statuses, models and
+/// times are read; no tool input, output or message text is selected.
+#[derive(Clone, Debug, Serialize)]
+pub struct TimelineLane {
+    pub thread: String,
+    pub title: String,
+    /// Lineage parent, used by the page to indent a lane under its parent.
+    pub parent: Option<String>,
+    pub model: Option<String>,
+    pub runs: Vec<TimelineRun>,
+    pub waits: Vec<TimelineWait>,
+    /// Busy milliseconds inside the day, used to rank lanes.
+    pub score: i64,
+    /// Last activity inside the day, a tie-breaker for ranking.
+    pub last: i64,
+}
+
 /// One row of T3's event log, reduced to safe fields.
 #[derive(Clone, Debug, Default)]
 pub struct Ev {
@@ -807,6 +844,105 @@ impl T3 {
         rows.collect()
     }
 
+    /// For the "who ate when" day timeline: runs and wait periods of every
+    /// T3 thread active in `[from_ms, to_ms)`, grouped into lanes. A run
+    /// counts when it was requested in the day or completed in the day, so a
+    /// run crossing midnight shows on both sides. Lanes are ordered by busy
+    /// time (most active first) and capped at `limit`. Every value is bound;
+    /// the query selects metadata only, never message text or tool payloads.
+    pub fn timeline_lanes(&self, from_ms: i64, to_ms: i64, now: i64, limit: usize) -> rusqlite::Result<Vec<TimelineLane>> {
+        let (from, to) = (iso_ms(from_ms), iso_ms(to_ms));
+        let run_sql = "SELECT r.thread_id, coalesce(t.title, r.thread_id),
+                              json_extract(t.payload_json,'$.lineage.parentThreadId'),
+                              json_extract(t.payload_json,'$.modelSelection.model'),
+                              r.ordinal, r.status, r.requested_at,
+                              json_extract(r.payload_json,'$.startedAt'), r.completed_at,
+                              json_extract(r.payload_json,'$.modelSelection.model')
+                       FROM orchestration_v2_projection_runs r
+                       LEFT JOIN orchestration_v2_projection_threads t
+                         ON t.thread_id = r.thread_id AND t.deleted_at IS NULL
+                       WHERE (r.requested_at >= ?1 AND r.requested_at < ?2)
+                          OR (r.requested_at < ?1 AND r.completed_at >= ?1 AND r.completed_at < ?2)
+                       ORDER BY r.thread_id, r.ordinal";
+        let mut lanes: HashMap<String, TimelineLane> = HashMap::new();
+        {
+            let mut st = self.conn.prepare_cached(run_sql)?;
+            let rows = st.query_map(params![from, to], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<String>>(7)?,
+                    r.get::<_, Option<String>>(8)?,
+                    r.get::<_, Option<String>>(9)?,
+                ))
+            })?;
+            for row in rows.flatten() {
+                let (tid, title, parent, tmodel, ord, status, requested, started, completed, rmodel) = row;
+                let at = ts(started).or_else(|| ts(requested)).unwrap_or(from_ms).max(from_ms).min(to_ms);
+                let end = ts(completed).unwrap_or(now).min(to_ms).max(at);
+                let entry = lanes.entry(tid.clone()).or_insert_with(|| TimelineLane {
+                    thread: tid,
+                    title,
+                    parent,
+                    model: tmodel,
+                    runs: Vec::new(),
+                    waits: Vec::new(),
+                    score: 0,
+                    last: 0,
+                });
+                entry.score += end - at;
+                entry.last = entry.last.max(end);
+                if status == "waiting" {
+                    entry.waits.push(TimelineWait { at, to: end, kind: "waiting" });
+                }
+                entry.runs.push(TimelineRun { n: ord, status, at, to: end, model: rmodel });
+            }
+        }
+        // T3 also records a wait as an approval or link request turn item.
+        let wait_sql = "SELECT thread_id,
+                               coalesce(json_extract(payload_json,'$.startedAt'), updated_at),
+                               updated_at, type
+                        FROM orchestration_v2_projection_turn_items
+                        WHERE type IN ('approval_request','link_request')
+                          AND updated_at >= ?1 AND updated_at < ?2
+                        ORDER BY thread_id, updated_at";
+        {
+            let mut st = self.conn.prepare_cached(wait_sql)?;
+            let rows = st.query_map(params![from, to], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?))
+            })?;
+            for row in rows.flatten() {
+                let (tid, started, updated, ty) = row;
+                let at = ts(started).or_else(|| ts(updated.clone())).unwrap_or(from_ms).max(from_ms).min(to_ms);
+                let end = ts(updated).unwrap_or(now).min(to_ms).max(at);
+                let entry = lanes.entry(tid.clone()).or_insert_with(|| TimelineLane {
+                    title: tid.clone(),
+                    thread: tid,
+                    parent: None,
+                    model: None,
+                    runs: Vec::new(),
+                    waits: Vec::new(),
+                    score: 0,
+                    last: 0,
+                });
+                entry.waits.push(TimelineWait { at, to: end, kind: if ty == "approval_request" { "approval" } else { "link" } });
+            }
+        }
+        let mut out: Vec<TimelineLane> = lanes.into_values().collect();
+        for lane in &mut out {
+            lane.runs.sort_by_key(|r| r.at);
+            lane.waits.sort_by_key(|w| w.at);
+        }
+        out.sort_by(|a, b| b.score.cmp(&a.score).then(b.last.cmp(&a.last)).then(a.thread.cmp(&b.thread)));
+        out.truncate(limit);
+        Ok(out)
+    }
+
     /// Runs requested since `since_ms` (for the three-day view).
     pub fn runs_since(&self, since_ms: i64) -> rusqlite::Result<Vec<RunRow>> {
         let mut st = self.conn.prepare_cached(
@@ -1048,6 +1184,81 @@ mod tests {
             Some(("Backend".into(), Some("demo".into()), Some("claude-opus-5-5".into())))
         );
         assert_eq!(t.thread_meta("nope").unwrap(), None);
+    }
+
+    #[test]
+    fn timeline_lanes_filters_orders_and_keeps_waits() {
+        let p = fixture("timeline", false);
+        {
+            let c = Connection::open(&p).unwrap();
+            c.execute_batch(
+                "INSERT INTO orchestration_v2_projection_threads VALUES
+                   ('waiter','p1','Waiter','2026-11-17T11:00:00.000Z','2026-11-17T12:00:00.000Z',NULL,NULL,'{}','claudeAgent');
+                 INSERT INTO orchestration_v2_projection_runs VALUES
+                   ('r1','kid',1,'completed','2026-11-17T08:30:00.000Z','2026-11-17T08:40:00.000Z','{\"startedAt\":\"2026-11-17T08:31:00.000Z\",\"modelSelection\":{\"model\":\"claude-sonnet-5-5\"}}'),
+                   ('r-old','kid',0,'completed','2026-11-16T08:30:00.000Z','2026-11-16T08:40:00.000Z','{}'),
+                   ('rhq','hq',1,'completed','2026-11-17T10:00:00.000Z','2026-11-17T10:30:00.000Z','{\"startedAt\":\"2026-11-17T10:00:00.000Z\"}'),
+                   ('rwait','waiter',1,'waiting','2026-11-17T11:00:00.000Z',NULL,'{\"startedAt\":\"2026-11-17T11:00:00.000Z\"}');
+                 INSERT INTO orchestration_v2_projection_turn_items VALUES
+                   ('appr','kid','r2',2,'approval_request','completed','2026-11-17T09:30:00.000Z','{\"startedAt\":\"2026-11-17T09:25:00.000Z\"}');",
+            )
+            .unwrap();
+        }
+        let t = T3::open(&p).unwrap();
+        let d17 = parse_ts_ms("2026-11-17T00:00:00Z").unwrap();
+        let now = parse_ts_ms("2026-11-17T12:00:00Z").unwrap();
+        let lanes = t.timeline_lanes(d17, d17 + 24 * 3_600_000, now, 40).unwrap();
+        // Most active first: the long still-open kid run, then the waiter,
+        // then the short HQ run. The 16 Nov run never appears.
+        assert_eq!(lanes.iter().map(|l| l.thread.as_str()).collect::<Vec<_>>(), vec!["kid", "waiter", "hq"]);
+        let kid = &lanes[0];
+        assert_eq!(kid.runs.iter().map(|r| r.n).collect::<Vec<_>>(), vec![1, 3]);
+        assert!(!kid.runs.iter().any(|r| r.n == 0), "the out-of-day run is excluded");
+        assert_eq!(kid.runs[1].status, "running");
+        assert_eq!(kid.runs[1].to, now, "an open run ends at now");
+        assert_eq!(kid.waits.len(), 1);
+        assert_eq!(kid.waits[0].kind, "approval");
+        // A run whose status is "waiting" is a wait segment too.
+        assert_eq!(lanes[1].waits.len(), 1);
+        assert_eq!(lanes[1].waits[0].kind, "waiting");
+        // A cap of 1 keeps only the most active lane.
+        let one = t.timeline_lanes(d17, d17 + 24 * 3_600_000, now, 1).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].thread, "kid");
+    }
+
+    #[test]
+    fn timeline_lanes_caps_at_forty() {
+        let p = fixture("timeline-cap", false);
+        {
+            let c = Connection::open(&p).unwrap();
+            let mut sql = String::from("INSERT INTO orchestration_v2_projection_threads VALUES ");
+            for i in 0..45 {
+                if i > 0 { sql.push(','); }
+                sql.push_str(&format!("('t{i:02}','p1','T {i:02}','2026-11-17T08:00:00.000Z','2026-11-17T09:00:00.000Z',NULL,NULL,'{{}}','claudeAgent')"));
+            }
+            sql.push(';');
+            c.execute_batch(&sql).unwrap();
+            let mut sql = String::from("INSERT INTO orchestration_v2_projection_runs VALUES ");
+            for i in 0..45 {
+                if i > 0 { sql.push(','); }
+                let hh = 8 + i / 60;
+                let mm = i % 60;
+                sql.push_str(&format!("('rt{i:02}','t{i:02}',1,'completed','2026-11-17T08:00:00.000Z','2026-11-17T{hh:02}:{mm:02}:00.000Z','{{\"startedAt\":\"2026-11-17T08:00:00.000Z\"}}')"));
+            }
+            sql.push(';');
+            c.execute_batch(&sql).unwrap();
+        }
+        let t = T3::open(&p).unwrap();
+        let d17 = parse_ts_ms("2026-11-17T00:00:00Z").unwrap();
+        let now = parse_ts_ms("2026-11-17T12:00:00Z").unwrap();
+        let lanes = t.timeline_lanes(d17, d17 + 24 * 3_600_000, now, 40).unwrap();
+        assert_eq!(lanes.len(), 40, "the lane list is capped");
+        // kid's long open run from the base fixture ranks first, then the
+        // longest synthetic runs. The shortest ones fall outside the cap.
+        assert_eq!(lanes[0].thread, "kid");
+        assert!(lanes.iter().any(|l| l.thread == "t44"));
+        assert!(!lanes.iter().any(|l| l.thread == "t00"));
     }
 
     #[test]
