@@ -463,13 +463,6 @@ figcaption { display: flex; flex-direction: column; gap: .25rem; margin-top: .9r
   }
 }
 @keyframes pin-print { from { box-shadow: 2px 2px 0 var(--shadow); } }
-.scene[data-scene="hero"][data-pose="peek"] :is([data-sprite="coral"], [data-sprite="lilac"], [data-sprite="blue"]) {
-  animation: blink 9s steps(1) infinite;
-}
-.scene[data-scene="hero"][data-pose="peek"] [data-sprite="lilac"] { animation-delay: -2s; }
-.scene[data-scene="hero"][data-pose="peek"] [data-sprite="blue"] { animation-delay: -6s; }
-@keyframes blink { 97% { opacity: 0; } 98.4% { opacity: 1; } }
-
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }

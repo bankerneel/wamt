@@ -18,14 +18,17 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const DEFAULT_SITE = fileURLToPath(new URL('../', import.meta.url));
-const DEFAULT_OUT = 'D:/Projects/wamt/hq/assets/landing/screens';
+const DEFAULT_OUT = 'D:/Projects/wamt/hq/assets/landing/screens/r2';
 const DEFAULT_DEPS = path.join(os.tmpdir(), 'wamt-landing-check-deps');
 const VIEWPORTS = [
   { name: '390x844', width: 390, height: 844, isMobile: true, hasTouch: true },
   { name: '1440x900', width: 1440, height: 900, isMobile: false, hasTouch: false }
 ];
 const THEMES = ['light', 'dark'];
-const POINTS = ['hero', 'mid-bite', 'evidence', 'suspects', 'install'];
+const POINTS = ['hero', 'mid-bite', 'evidence', 'suspects', 'case-notes', 'install'];
+const HERO = '[data-scene="hero"]';
+const HERO_BLOBS = HERO + ' :is([data-sprite="coral"], [data-sprite="lilac"], [data-sprite="blue"])';
+const SECTION_SHOT = { style: '.site-header, .skip-link { visibility: hidden !important; }' };
 
 function parseArgs(argv) {
   const out = { _flags: new Set() };
@@ -159,7 +162,8 @@ const MIME = {
   '.avif': 'image/avif',
   '.woff2': 'font/woff2',
   '.txt': 'text/plain; charset=utf-8',
-  '.ico': 'image/x-icon'
+  '.ico': 'image/x-icon',
+  '.xml': 'application/xml; charset=utf-8'
 };
 
 function startServer(root) {
@@ -235,6 +239,127 @@ async function scrollToSelector(page, selector) {
     if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', behavior: 'instant' });
   }, selector);
   await settle(page);
+}
+
+async function heroFrames(page) {
+  return page.locator(HERO_BLOBS).evaluateAll(blobs => blobs.map(blob => Number(blob.dataset.frame)));
+}
+
+async function checkHeroPixels(page) {
+  await page.locator(HERO).evaluate(async (scene) => {
+    const border = scene.getBoundingClientRect();
+    const edge = scene.querySelector('.cam-counter').getBoundingClientRect().top;
+    const sprites = Array.from(scene.querySelectorAll('[data-sprite]'));
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const areas = [];
+    for (const sprite of sprites) {
+      const name = sprite.dataset.sprite;
+      const body = !['plate', 'cookie'].includes(name);
+      const style = getComputedStyle(sprite);
+      const px = Number(style.getPropertyValue('--magnification'));
+      const width = parseInt(style.getPropertyValue('--cell-w'), 10);
+      const height = parseInt(style.getPropertyValue('--cell-h'), 10);
+      const box = sprite.getBoundingClientRect();
+      const visibleRows = body ? Math.min(height, Math.floor((edge - box.top) / px)) : height;
+      const frame = Number(sprite.dataset.frame || style.getPropertyValue('--still'));
+      const image = new Image();
+      image.src = style.backgroundImage.slice(5, -2);
+      await image.decode();
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(image, frame * width, 0, width, height, 0, 0, width, height);
+      const { data } = ctx.getImageData(0, 0, width, visibleRows);
+      const ink = new Set();
+      let left = width, top = height, right = 0, bottom = 0;
+      for (let y = 0; y < visibleRows; y++) {
+        for (let x = 0; x < width; x++) {
+          if (!data[(y * width + x) * 4 + 3]) continue;
+          ink.add(y * width + x);
+          left = Math.min(left, x);
+          right = Math.max(right, x + 1);
+          top = Math.min(top, y);
+          bottom = Math.max(bottom, y + 1);
+        }
+      }
+      const area = {
+        name, body, left: box.left + left * px, right: box.left + right * px,
+        top: box.top + top * px, bottom: box.top + bottom * px
+      };
+      if (!ink.size || area.left < border.left || area.right > border.right ||
+          area.top < border.top || area.bottom > border.bottom) {
+        throw new Error(name + ' has missing or clipped art');
+      }
+      if (body) {
+        const first = ink.values().next().value;
+        ink.delete(first);
+        const pending = [first];
+        while (pending.length) {
+          const pixel = pending.pop();
+          const x = pixel % width;
+          const neighbors = [pixel - width, pixel + width];
+          if (x > 0) neighbors.push(pixel - 1);
+          if (x + 1 < width) neighbors.push(pixel + 1);
+          for (const neighbor of neighbors) if (ink.delete(neighbor)) pending.push(neighbor);
+        }
+        if (ink.size || bottom !== visibleRows) {
+          throw new Error(name + ' has floating pixels at frame ' + frame);
+        }
+      }
+      for (const previous of areas) {
+        if ((body || previous.body) && area.left < previous.right && area.right > previous.left &&
+            area.top < previous.bottom && area.bottom > previous.top) {
+          throw new Error(name + ' overlaps ' + previous.name);
+        }
+      }
+      areas.push(area);
+    }
+  });
+}
+
+async function captureHero(page, url, save) {
+  const now = new Date();
+  await page.clock.install({ time: now });
+  await page.clock.pauseAt(new Date(+now + 1000));
+  await page.goto(url, { waitUntil: 'load' });
+  await page.clock.runFor(220);
+  assert.equal(await page.locator(HERO).getAttribute('data-pose'), 'hidden');
+  assert.deepEqual(await heroFrames(page), [0, 0, 0]);
+  await checkHeroPixels(page);
+  await save('hero-hidden');
+
+  await page.clock.runFor(230);
+  await page.clock.resume();
+  await settle(page);
+  assert.equal(await page.locator(HERO).getAttribute('data-pose'), 'peek');
+  assert.deepEqual(await heroFrames(page), [1, 1, 1]);
+  await checkHeroPixels(page);
+  await save('hero-peek');
+
+  const box = await page.locator(HERO).boundingBox();
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  for (const [dx, dy, frame] of [[-90, 0, 2], [0, -90, 4], [0, 90, 5], [90, 0, 3]]) {
+    await page.mouse.move(x + dx, y + dy);
+    await settle(page);
+    assert.deepEqual(await heroFrames(page), [frame, frame, frame]);
+    await checkHeroPixels(page);
+  }
+  await save('hero-gaze');
+
+  for (const [offset, frame] of [[13, 6], [52, 7], [88, 8], [52, 7], [13, 6], [0, 3]]) {
+    await scrollY(page, offset);
+    assert.deepEqual(await heroFrames(page), [frame, frame, frame]);
+    await checkHeroPixels(page);
+    if (offset === 88) {
+      assert.equal(await page.locator(HERO).getAttribute('data-pose'), 'sneak');
+      await save('hero-sneak');
+    }
+  }
+  const clock = page.locator('[data-cam-clock]');
+  const time = await clock.textContent();
+  assert.match(time, /^\d{2}:\d{2}:\d{2}$/);
+  await page.waitForFunction(last => document.querySelector('[data-cam-clock]').dateTime !== last, time);
 }
 
 async function findMidScroll(page) {
@@ -351,8 +476,7 @@ async function main() {
       args: ['--no-sandbox', '--disable-background-networking', '--disable-default-apps']
     });
 
-    // Screenshot matrix: two viewports, two system color schemes, five points,
-    // plus one reduced-motion finale = 21 files.
+    // Two viewports and two themes, with an additional desktop camera sequence.
     for (const vp of VIEWPORTS) {
       for (const theme of THEMES) {
         const ctx = await browser.newContext({
@@ -366,7 +490,12 @@ async function main() {
         try {
           const page = await ctx.newPage();
           makeMonitors(page, 'shot-' + vp.name + '-' + theme);
-          await goto(page, url);
+          if (vp.isMobile) await goto(page, url);
+          else await captureHero(page, url, async (state) => {
+            const file = path.join(OUT_DIR, vp.width + '-' + theme + '-' + state + '.png');
+            await page.screenshot({ path: file });
+            screenshots.push(file);
+          });
           const midY = await findMidScroll(page);
 
           for (const point of POINTS) {
@@ -387,14 +516,14 @@ async function main() {
                   for (const image of images) image.loading = 'eager';
                   await Promise.all(images.map((image) => image.decode()));
                 });
-                await el.screenshot({ path: file });
+                await el.screenshot({ path: file, ...SECTION_SHOT });
               }
               else {
                 await page.screenshot({ path: file });
                 notes.push('missing #evidence, used viewport capture for ' + name);
               }
-            } else if (point === 'install' || point === 'suspects') {
-              await page.locator('#' + point).screenshot({ path: file });
+            } else if (['install', 'suspects', 'case-notes'].includes(point)) {
+              await page.locator('#' + point).screenshot({ path: file, ...SECTION_SHOT });
             } else {
               await page.screenshot({ path: file });
             }
@@ -422,7 +551,7 @@ async function main() {
         await goto(page, url);
         await scrollToSelector(page, '#install');
         const file = path.join(OUT_DIR, '390-dark-reduced-finale.png');
-        await page.locator('#install').screenshot({ path: file });
+        await page.locator('#install').screenshot({ path: file, ...SECTION_SHOT });
         screenshots.push(file);
       } finally {
         await ctx.close();
@@ -439,11 +568,11 @@ async function main() {
     });
     await ctxDesktop.grantPermissions(['clipboard-read', 'clipboard-write'], { origin }).catch(() => {});
 
-    await check('screenshot matrix is 21 files', async () => {
-      assert.equal(screenshots.length, 21, 'expected 21 screenshots, got ' + screenshots.length);
+    await check('screenshot matrix includes both hero sequences', async () => {
+      assert.equal(screenshots.length, 33, 'expected 33 screenshots, got ' + screenshots.length);
       const missing = screenshots.filter((f) => !fs.existsSync(f) || fs.statSync(f).size < 100);
       assert.equal(missing.length, 0, 'missing or empty screenshots: ' + missing.join(', '));
-      return '21 files written to ' + OUT_DIR;
+      return screenshots.length + ' files written to ' + OUT_DIR;
     });
 
     await check('transfer size, cold cache', async () => {
@@ -468,8 +597,10 @@ async function main() {
     });
 
     await check('gzipped source budget', async () => {
-      const files = walk(SITE_ROOT).filter((f) => /\.(js|css|html)$/i.test(f) &&
-        !path.relative(SITE_ROOT, f).split(path.sep).some((part) => part.startsWith('.') || part === 'tests'));
+      const assets = walk(SITE_ROOT).filter((file) =>
+        !path.relative(SITE_ROOT, file).split(path.sep).some((part) => part.startsWith('.') || part === 'tests'));
+      const total = assets.reduce((sum, file) => sum + fs.statSync(file).size, 0);
+      const files = assets.filter((file) => /\.(js|css|html)$/i.test(file));
       let raw = 0;
       let gz = 0;
       let jsGz = 0;
@@ -484,9 +615,12 @@ async function main() {
       transfer.sourceRawBytes = raw;
       transfer.sourceGzipBytes = gz;
       transfer.jsGzipBytes = jsGz;
+      transfer.siteBytes = total;
+      assert(total < 1_000_000, 'static assets exceed 1 MB: ' + total + 'B');
       assert(files.length > 0, 'no html/css/js source found under ' + SITE_ROOT);
       assert(gz < 60 * 1024, 'html+css+js gzip ' + gz + 'B exceeds 60 KB');
-      return 'raw=' + raw + 'B, gzip=' + gz + 'B, jsGzip=' + jsGz + 'B';
+      assert(jsGz < 25_000, 'JS gzip exceeds 25 KB: ' + jsGz + 'B');
+      return 'site=' + total + 'B, gzip=' + gz + 'B, jsGzip=' + jsGz + 'B';
     });
 
     await check('markup contract', async () => {
@@ -528,6 +662,30 @@ async function main() {
       return 'all required selectors found';
     });
 
+    await check('case notes and source metadata', async () => {
+      const page = await ctxDesktop.newPage();
+      makeMonitors(page, 'case-notes');
+      await goto(page, url);
+      const steps = await page.locator('#case-notes li').allTextContents();
+      assert.equal(steps.length, 3);
+      assert.match(steps[0], /T3 Code, Claude Code and Codex/);
+      assert.match(steps[1], /One Rust binary/);
+      assert.match(steps[2], /127\.0\.0\.1/);
+      const alibis = await page.locator('.suspect-alibi').allTextContents();
+      assert.deepEqual(alibis, ['Read-only SQLite state.', 'Transcripts in ~/.claude/projects.', 'Session files in ~/.codex/sessions.']);
+      const source = JSON.parse(await page.locator('head script[type="application/ld+json"]').textContent());
+      assert.equal(source['@type'], 'SoftwareSourceCode');
+      assert.equal(source.codeRepository, 'https://github.com/bankerneel/wamt');
+      assert.match(source.license, /\/LICENSE$/);
+      assert.ok(source.name && source.description);
+      const canonical = await page.locator('link[rel="canonical"]').getAttribute('href');
+      const sitemap = await fetch(origin + '/sitemap.xml');
+      assert.ok(sitemap.ok);
+      assert.ok((await sitemap.text()).includes('<loc>' + canonical + '</loc>'));
+      await page.close();
+      return 'three steps, three alibis, SoftwareSourceCode and canonical sitemap';
+    });
+
     await check('theme toggle and aria-pressed', async () => {
       const page = await ctxDesktop.newPage();
       makeMonitors(page, 'theme');
@@ -566,6 +724,14 @@ async function main() {
       try { copied = await page.evaluate(() => navigator.clipboard.readText()); } catch { /* permission may block */ }
       assert(after.length > 0, 'copy status stayed empty');
       if (copied) assert(copied.includes('cargo build'), 'clipboard did not contain quick start');
+      const pose = page.locator('[data-scene="finale"] [data-sprite="coral"]');
+      await page.waitForFunction(() => {
+        const frame = Number(document.querySelector('[data-scene="finale"] [data-sprite="coral"]').dataset.frame);
+        return frame >= 4 && frame <= 9;
+      });
+      await page.waitForFunction(() =>
+        document.querySelector('[data-scene="finale"] [data-sprite="coral"]').dataset.frame === '11');
+      assert.equal(await pose.getAttribute('data-frame'), '11');
       await page.close();
       return 'status="' + after + '", clipboardChecked=' + (copied.length > 0);
     });
@@ -658,6 +824,11 @@ async function main() {
       const midY = await findMidScroll(page);
       await scrollY(page, midY);
       const atMid = await read();
+      await page.waitForFunction(() => {
+        const canvas = document.querySelector('[data-scene="stage"] canvas');
+        return canvas && canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height)
+          .data.some((alpha, i) => i % 4 === 3 && alpha > 0);
+      });
       await scrollToSelector(page, '#install');
       const atInstall = await read();
       await scrollY(page, midY);
@@ -668,6 +839,18 @@ async function main() {
       assert.equal(backMid, atMid, 'cookie frame at mid changed after scrolling away and back');
       assert.equal(backHero, atHero, 'cookie frame at hero changed after scrolling away and back');
       assert(Number(atInstall) >= Number(atMid), 'cookie did not advance toward install');
+      for (const state of [1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0]) {
+        const position = state ? await page.locator('[data-beat="' + state + '"]').evaluate(el =>
+          scrollY + el.getBoundingClientRect().top - innerHeight * 0.25) : 0;
+        await scrollY(page, position);
+        assert.equal(Number(await read()), state);
+        assert.equal(await page.locator('[data-favicon]').getAttribute('href'), '/img/sprites/favicon-' + state + '.png');
+        assert.equal(await page.locator('[data-plate-meter]').evaluate(meter => meter.value), 7 - state);
+        if (state === 7) {
+          assert.equal(await page.locator('[data-plate-label]').textContent(), 'plate empty');
+          assert.equal(await page.locator('#finale-plate').evaluate(meter => meter.value), 0);
+        }
+      }
       let historyNote = 'scroll reversal ok';
       if ((await page.evaluate(() => history.length)) > 1) {
         await page.goBack().catch(() => {});
@@ -704,22 +887,50 @@ async function main() {
       return 'favicon=' + icon + ', title swaps and restores on a simulated visibility change';
     });
 
-    await check('horizontal overscroll at 320, 390, 768, 1440', async () => {
+    await check('camera and horizontal bounds in both themes', async () => {
       const page = await ctxDesktop.newPage();
       makeMonitors(page, 'overscroll');
       const report = [];
-      for (const width of [320, 390, 768, 1440]) {
-        await page.setViewportSize({ width, height: 844 });
-        await goto(page, url);
-        const m = await page.evaluate(() => ({
-          doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-          body: document.body.scrollWidth - document.body.clientWidth
-        }));
-        report.push(width + ':' + Math.max(m.doc, m.body));
-        assert(Math.max(m.doc, m.body) <= 1, 'horizontal overflow ' + Math.max(m.doc, m.body) + 'px at ' + width + 'px');
+      for (const colorScheme of THEMES) {
+        await page.emulateMedia({ colorScheme });
+        for (const width of [320, 390, 768, 1024, 1440]) {
+          await page.setViewportSize({ width, height: 844 });
+          await goto(page, url);
+          await page.waitForFunction(() => document.querySelector('[data-scene="hero"]').dataset.pose === 'peek');
+          await checkHeroPixels(page);
+          await scrollY(page, 88);
+          await checkHeroPixels(page);
+          const overflow = await page.evaluate(() => Math.max(
+            document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            document.body.scrollWidth - document.body.clientWidth
+          ));
+          assert.equal(overflow, 0, colorScheme + ' at ' + width + 'px');
+          report.push(colorScheme + '/' + width);
+        }
       }
       await page.close();
       return report.join(', ');
+    });
+
+    await check('every evidence caption clears every other card', async () => {
+      const page = await ctxDesktop.newPage();
+      makeMonitors(page, 'captions');
+      for (const width of [390, 768, 1024, 1440]) {
+        await page.setViewportSize({ width, height: 844 });
+        await goto(page, url);
+        await scrollToSelector(page, '#evidence');
+        const coverage = await page.locator('#evidence figure').evaluateAll(cards => {
+          const hit = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+          const rects = cards.map(card => card.getBoundingClientRect());
+          return cards.map((card, i) => {
+            const caption = card.querySelector('figcaption').getBoundingClientRect();
+            return rects.some((rect, j) => j !== i && hit(caption, rect));
+          });
+        });
+        assert.deepEqual(coverage, Array(7).fill(false), 'caption overlap at ' + width + 'px');
+      }
+      await page.close();
+      return 'all 7 clear at 390, 768, 1024 and 1440';
     });
 
     await check('no console warnings, errors or page errors', async () => {
@@ -776,6 +987,9 @@ async function main() {
         assert(info.code.includes('cargo build --release'), 'quick start missing cargo build');
         assert(info.code.includes('scripts/wamt start'), 'quick start missing start');
         assert(info.code.includes('scripts/wamt open'), 'quick start missing open');
+        assert.equal((await nodes('#case-notes li')).length, 3);
+        assert.equal((await nodes('#suspects .suspect-alibi')).length, 3);
+        assert.match(await plainText('label[for="finale-plate"]'), /Plate empty/);
         return 'h1="' + info.h1Text.slice(0, 40) + '", links=' + info.links + ', text=' + info.text;
       } finally {
         await ctx.close();
@@ -801,6 +1015,8 @@ async function main() {
         assert(info.matches, 'reduce media query not active');
         const noAnim = info.animName === 'none' || parseFloat(info.animDuration) === 0 || info.animDuration === '0s';
         assert(noAnim, 'animation still active under reduce: ' + JSON.stringify(info));
+        assert.equal(await page.locator(HERO).getAttribute('data-pose'), 'still');
+        assert.deepEqual(await heroFrames(page), [9, 9, 9]);
         await scrollToSelector(page, '#install');
         const finalFrame = await page.evaluate(() => {
           const el = document.querySelector('.eating-stage [data-sprite="cookie"]') || document.querySelector('.sprite[data-sprite="cookie"][data-frame]');

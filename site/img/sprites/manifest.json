@@ -1,8 +1,41 @@
 {
   "layout": "horizontal",
   "rangeConvention": "Inclusive zero-based frame indices",
-  "baselineConvention": "Source y in pixels at the lower edge of the aligned art. Burst particles move around the cookie baseline.",
+  "baselineConvention": "Source y in pixels at the lower edge of the aligned art. Burst particles move around the cookie baseline. Camera props use a baseline per frame.",
+  "cameraConvention": "Camera sheets sample one pixel from each 4x4 source block for integer magnification. Look and sneak retain the original poses. Hidden recolors the neutral pose around the eyes.",
   "files": {
+    "cam-coral.png": {
+      "frameWidth": 34,
+      "frameHeight": 30,
+      "frameCount": 10,
+      "artPixelScale": 1,
+      "baselineY": 28,
+      "ranges": {"hidden": [0, 0], "look": [1, 5], "sneak": [6, 8], "caught": [9, 9]}
+    },
+    "cam-lilac.png": {
+      "frameWidth": 34,
+      "frameHeight": 30,
+      "frameCount": 10,
+      "artPixelScale": 1,
+      "baselineY": 28,
+      "ranges": {"hidden": [0, 0], "look": [1, 5], "sneak": [6, 8], "caught": [9, 9]}
+    },
+    "cam-blue.png": {
+      "frameWidth": 34,
+      "frameHeight": 30,
+      "frameCount": 10,
+      "artPixelScale": 1,
+      "baselineY": 28,
+      "ranges": {"hidden": [0, 0], "look": [1, 5], "sneak": [6, 8], "caught": [9, 9]}
+    },
+    "cam-props.png": {
+      "frameWidth": 36,
+      "frameHeight": 20,
+      "frameCount": 3,
+      "artPixelScale": 1,
+      "baselineY": [15, 18, 18],
+      "ranges": {"plate": [0, 0], "whole": [1, 1], "crumbs": [2, 2]}
+    },
     "blob-coral.png": {
       "frameWidth": 136,
       "frameHeight": 120,

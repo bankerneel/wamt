@@ -19,6 +19,16 @@
 <meta name="twitter:description" content="A local, read-only token observation layer for T3 Code, Claude Code and Codex. One Rust binary, one page, and nothing leaves your machine.">
 <meta name="twitter:image" content="https://whoatemytokens.neelbanker.com/img/social-preview.png">
 <meta name="twitter:image:alt" content="Who Ate My Tokens? Token observation layer for T3 Code, Claude Code and Codex">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "Who Ate My Tokens?",
+  "description": "A local, read-only token observation layer for T3 Code, Claude Code and Codex.",
+  "codeRepository": "https://github.com/bankerneel/wamt",
+  "license": "https://github.com/bankerneel/wamt/blob/main/LICENSE"
+}
+</script>
 <link rel="preload" href="/fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/caveat.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="icon" data-favicon href="/favicon.svg">
@@ -79,13 +89,19 @@
         </ul>
         </div>
       </div>
-      <div class="hero-scene scene-host">
+      <div class="hero-scene scene-host" aria-hidden="true">
         <div class="scene" data-scene="hero">
-          <div class="sprite" data-sprite="plate" aria-hidden="true"></div>
-          <div class="sprite" data-sprite="cookie" aria-hidden="true"></div>
-          <div class="sprite" data-sprite="coral" aria-hidden="true"></div>
-          <div class="sprite" data-sprite="lilac" aria-hidden="true"></div>
-          <div class="sprite" data-sprite="blue" aria-hidden="true"></div>
+          <div class="cam-display">
+            <span class="cam-rec">REC</span>
+            <span>CAM 01</span>
+            <time data-cam-clock hidden></time>
+          </div>
+          <div class="cam-counter"></div>
+          <div class="sprite" data-sprite="plate"></div>
+          <div class="sprite" data-sprite="cookie"></div>
+          <div class="sprite" data-sprite="coral"></div>
+          <div class="sprite" data-sprite="lilac"></div>
+          <div class="sprite" data-sprite="blue"></div>
         </div>
       </div>
     </div>
@@ -317,6 +333,10 @@
           <div class="sprite" data-sprite="coral" aria-hidden="true"></div>
           <div class="sprite" data-sprite="lilac" aria-hidden="true"></div>
           <div class="sprite" data-sprite="blue" aria-hidden="true"></div>
+        </div>
+        <div class="plate-meter finale-meter">
+          <label for="finale-plate" class="plate-meter-label">Plate empty</label>
+          <meter id="finale-plate" min="0" max="7" value="0">0 of 7</meter>
         </div>
       </div>
       <div class="install-copy">

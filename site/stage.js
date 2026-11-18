@@ -15,11 +15,15 @@
   const favicon = document.querySelector('[data-favicon]');
   const originalTitle = document.title;
   const suspects = [...document.querySelectorAll('[data-suspect]')];
-  const plateWords = ['whole', 'nibbled', 'bitten', 'bitten', 'half', 'last piece', 'last bite', 'crumbs'];
+  const plateWords = ['whole', 'nibbled', 'bitten', 'bitten', 'half', 'last piece', 'last bite', 'plate empty'];
+  const hero = scenes.hero.element;
+  const clock = hero.querySelector('[data-cam-clock]');
 
   let geometry;
   let heroBox;
-  let gaze = 12;
+  let gaze = 1;
+  let peekReady = false;
+  let clockTimer;
   let paintRequest = 0;
   let celebration = 0;
   let crumbState = -1;
@@ -45,7 +49,7 @@
       const { top, height } = beat.getBoundingClientRect();
       return { top: top + scrollY, length: Math.min(innerHeight * 0.25, height * 0.65) };
     });
-    const rect = scenes.hero.element.getBoundingClientRect();
+    const rect = hero.getBoundingClientRect();
     heroBox = { x: rect.left + rect.width / 2, y: rect.top + scrollY + rect.height / 2 };
     schedulePaint();
   }
@@ -57,6 +61,28 @@
     const { top, length } = geometry[bite];
     const progress = bite ? Math.min(1, Math.max(0, (reader - top) / length)) : 0;
     return { bite, progress };
+  }
+
+  function paintHero(reduced) {
+    if (reduced) {
+      hero.dataset.pose = 'still';
+      pose('hero', 9);
+    } else if (scrollY > 12) {
+      const step = Math.min(2, Math.floor((scrollY - 13) / 36));
+      hero.dataset.pose = 'sneak';
+      hero.style.setProperty('--step', step);
+      pose('hero', 6 + step);
+    } else {
+      hero.dataset.pose = peekReady ? 'peek' : 'hidden';
+      pose('hero', peekReady ? gaze : 0);
+    }
+    setFrame(scenes.hero.sprites.cookie, reduced ? 2 : 1);
+  }
+
+  function tickClock() {
+    const time = new Date().toTimeString().slice(0, 8);
+    clock.dateTime = time;
+    clock.textContent = time;
   }
 
   function paint() {
@@ -84,15 +110,7 @@
     const href = '/img/sprites/favicon-' + state + '.png';
     if (favicon.getAttribute('href') !== href) favicon.setAttribute('href', href);
 
-    if (reduced) {
-      scenes.hero.element.dataset.pose = 'still';
-      pose('hero', 11);
-    } else {
-      const sneaking = scrollY > 12;
-      scenes.hero.element.dataset.pose = sneaking ? 'sneak' : 'peek';
-      pose('hero', sneaking ? Math.min(19, 17 + Math.floor((scrollY - 12) / 44)) : gaze);
-    }
-    setFrame(scenes.hero.sprites.cookie, reduced ? lastBite : 0);
+    paintHero(reduced);
 
     if (state !== crumbState) {
       crumbState = state;
@@ -108,9 +126,9 @@
     if (motion.matches || scrollY > 12 || event.pointerType === 'touch') return;
     const dx = event.clientX - heroBox.x;
     const dy = event.clientY - heroBox.y + scrollY;
-    let direction = 12;
+    let direction = 1;
     if (Math.max(Math.abs(dx), Math.abs(dy)) > 48) {
-      direction = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 13 : 14) : (dy < 0 ? 15 : 16);
+      direction = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 2 : 3) : (dy < 0 ? 4 : 5);
     }
     if (direction !== gaze) {
       gaze = direction;
@@ -118,7 +136,7 @@
     }
   }, { passive: true });
   document.documentElement.addEventListener('pointerleave', () => {
-    gaze = 12;
+    gaze = 1;
     schedulePaint();
   });
 
@@ -170,6 +188,18 @@
   addEventListener('resize', measure);
   addEventListener('load', measure);
   new ResizeObserver(measure).observe(document.body);
+  new IntersectionObserver(([entry]) => {
+    clearInterval(clockTimer);
+    if (!entry.isIntersecting) return;
+    tickClock();
+    clock.hidden = false;
+    clockTimer = setInterval(tickClock, 1000);
+  }).observe(hero);
+  paintHero(motion.matches);
+  setTimeout(() => {
+    peekReady = true;
+    schedulePaint();
+  }, 420);
   document.documentElement.setAttribute('data-reactions', '');
   goToFinale();
   measure();
