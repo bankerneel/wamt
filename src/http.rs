@@ -181,9 +181,17 @@ impl Server {
                     let _ = respond(&mut s, "400 Bad Request", "text/plain", b"bad thread id", head);
                     return;
                 };
-                let _ = match drill::build(&self.shared, &self.t3_db, &id, now_ms()) {
+                let day = match drill::day_from_query(&req.query) {
+                    Ok(day) => day,
+                    Err(()) => {
+                        let _ = respond(&mut s, "400 Bad Request", "text/plain", b"bad day", head);
+                        return;
+                    }
+                };
+                let _ = match drill::build(&self.shared, &self.t3_db, &id, now_ms(), day) {
                     Ok(body) => respond(&mut s, "200 OK", "application/json", body.as_bytes(), head),
                     Err(drill::DrillErr::NotFound) => respond(&mut s, "404 Not Found", "text/plain", b"unknown thread", head),
+                    Err(drill::DrillErr::BadDay) => respond(&mut s, "400 Bad Request", "text/plain", b"day outside the last seven days", head),
                     Err(drill::DrillErr::Unavailable) => respond(&mut s, "503 Service Unavailable", "text/plain", b"T3 data unavailable", head),
                     Err(drill::DrillErr::Db) => respond(&mut s, "500 Internal Server Error", "text/plain", b"cannot read thread", head),
                 };
@@ -333,6 +341,21 @@ mod tests {
             assert!(get(port, bad, &h).starts_with("HTTP/1.1 400"), "{bad}");
         }
         assert!(get(port, "/api/thread?id=mcp:abc", &h).starts_with("HTTP/1.1 503"));
+        // A well-formed day of the last seven is accepted (still 503 here:
+        // this test server has no T3 data); malformed or out-of-range is 400.
+        let t = crate::timeutil::now_ms();
+        let today = crate::timeutil::day_label(crate::timeutil::day_of(t, 0));
+        assert!(get(port, &format!("/api/thread?id=mcp:abc&day={today}"), &h).starts_with("HTTP/1.1 503"));
+        for bad in [
+            "/api/thread?id=mcp:abc&day=",
+            "/api/thread?id=mcp:abc&day=2026-13-01",
+            "/api/thread?id=mcp:abc&day=2026-02-30",
+            "/api/thread?id=mcp:abc&day=2026-11-18x",
+            "/api/thread?id=mcp:abc&day=2026%2F11%2F18",
+            "/api/thread?id=mcp:abc&day=1999-01-01",
+        ] {
+            assert!(get(port, bad, &h).starts_with("HTTP/1.1 400"), "{bad}");
+        }
         assert!(get(port, "/api/thread?id=mcp:abc", "evil.example:80").starts_with("HTTP/1.1 403"));
         assert!(get(port, "/", "evil.example:80").starts_with("HTTP/1.1 403"));
         assert!(get(port, "/", &format!("localhost:{port}")).contains("<title>t</title>"));

@@ -749,6 +749,27 @@ impl T3 {
         Ok(d)
     }
 
+    /// Title, project and model for one thread, read straight from SQLite.
+    /// The drill-down uses this when the thread has gone off the live board:
+    /// the id is bound, and no message text, tool input or output is selected.
+    pub fn thread_meta(&self, thread: &str) -> rusqlite::Result<Option<(String, Option<String>, Option<String>)>> {
+        self.conn
+            .prepare_cached(
+                "SELECT t.title, p.title, json_extract(t.payload_json,'$.modelSelection.model')
+                 FROM orchestration_v2_projection_threads t
+                 LEFT JOIN projection_projects p ON p.project_id = t.project_id
+                 WHERE t.thread_id = ?1 AND t.deleted_at IS NULL",
+            )?
+            .query_row([thread], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    r.get(1)?,
+                    r.get(2)?,
+                ))
+            })
+            .optional()
+    }
+
     /// Latest context fill and prompt-cache expiry for a thread.
     pub fn ctx(&self, thread: &str) -> rusqlite::Result<Option<Ctx>> {
         self.conn
@@ -976,6 +997,57 @@ mod tests {
         }
         assert_eq!(all.len(), 2);
         assert_eq!(all.iter().map(|e| e.seq).collect::<Vec<_>>(), paged.iter().map(|e| e.seq).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn thread_detail_day_range_selects_only_that_day() {
+        // The base fixture has a turn item and a subagent on 16 Nov and
+        // runs, items and a subagent on 17 Nov. Add one 16 Nov run and
+        // check that a drill-down for either day gets only that day's data.
+        let p = fixture("detail-day", false);
+        {
+            let c = Connection::open(&p).unwrap();
+            c.execute_batch(
+                "INSERT INTO orchestration_v2_projection_runs VALUES
+                   ('r-old','kid',0,'completed','2026-11-16T08:30:00.000Z','2026-11-16T08:40:00.000Z','{}');
+                 INSERT INTO orchestration_v2_projection_turn_items VALUES
+                   ('old','kid','r-old',7,'file_change','completed','2026-11-16T09:04:00.000Z','{}');
+                 INSERT INTO orchestration_v2_projection_subagents VALUES
+                   ('sa-old','kid','r-old',NULL,'app_owned','completed','2026-11-16T08:50:00.000Z','2026-11-16T08:55:00.000Z','2026-11-16T08:55:00.000Z','{\"model\":\"x\",\"title\":\"Scout yesterday\"}');",
+            )
+            .unwrap();
+            c.execute_batch(
+                "INSERT INTO orchestration_v2_projection_subagents VALUES
+                   ('sa-today','kid','r2',NULL,'app_owned','completed','2026-11-17T08:50:00.000Z','2026-11-17T08:55:00.000Z','2026-11-17T08:55:00.000Z','{\"model\":\"claude-haiku-5-5\",\"title\":\"Scout\"}');",
+            )
+            .unwrap();
+        }
+        let t = T3::open(&p).unwrap();
+        let d16 = parse_ts_ms("2026-11-16T00:00:00Z").unwrap();
+        let d17 = parse_ts_ms("2026-11-17T00:00:00Z").unwrap();
+        let yesterday = t.thread_detail("kid", d16, d16 + 24 * 3_600_000).unwrap();
+        assert_eq!(yesterday.runs.iter().map(|r| r.n).collect::<Vec<_>>(), vec![0]);
+        assert!(yesterday.tools.iter().any(|(n, _)| n == "Edit"));
+        assert_eq!(yesterday.subs.len(), 1);
+        assert_eq!(yesterday.subs[0].title.as_deref(), Some("Scout yesterday"));
+        let today = t.thread_detail("kid", d17, d17 + 24 * 3_600_000).unwrap();
+        assert_eq!(today.runs.iter().map(|r| r.n).collect::<Vec<_>>(), vec![3]);
+        assert!(!today.tools.iter().any(|(n, _)| n == "Edit"));
+        assert_eq!(today.subs.len(), 1);
+        assert_eq!(today.subs[0].title.as_deref(), Some("Scout"));
+        // A range outside the data gives empty sections, not an error.
+        let empty = t.thread_detail("kid", d17 + 48 * 3_600_000, d17 + 72 * 3_600_000).unwrap();
+        assert!(empty.runs.is_empty() && empty.tools.is_empty() && empty.subs.is_empty(), "{empty:?}");
+    }
+
+    #[test]
+    fn thread_meta_reads_title_project_and_model() {
+        let t = T3::open(&fixture("meta", false)).unwrap();
+        assert_eq!(
+            t.thread_meta("kid").unwrap(),
+            Some(("Backend".into(), Some("demo".into()), Some("claude-opus-5-5".into())))
+        );
+        assert_eq!(t.thread_meta("nope").unwrap(), None);
     }
 
     #[test]
