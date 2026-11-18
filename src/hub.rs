@@ -85,6 +85,7 @@ impl Hub {
         self.stale.swap(false, Ordering::Relaxed)
     }
 
+    #[cfg(test)]
     pub fn set_live(&self, json: String) {
         self.set_live_at(json, i64::MAX);
     }
@@ -101,10 +102,6 @@ impl Hub {
         s.live = Arc::new(json);
         s.live_v += 1;
         self.cv.notify_all();
-    }
-
-    pub fn set_days(&self, json: String) {
-        self.set_days_at(json, i64::MAX);
     }
 
     pub fn set_days_at(&self, json: String, at: i64) {
