@@ -214,6 +214,8 @@ pub struct Shared {
     /// Payload keys T3 seems to have renamed (numbers may be off).
     pub t3_warnings: Vec<String>,
     pub tx: TxPart,
+    /// Claude Code's own limits, read from the state dir by the tail worker.
+    pub cc_limits: Option<crate::cclimits::CcLimits>,
     pub sys: Sys,
     pub last_days_json: i64,
     /// A days update was throttled and still needs publishing.
@@ -229,6 +231,7 @@ impl Shared {
             t3_problems: Vec::new(),
             t3_warnings: Vec::new(),
             tx: TxPart::default(),
+            cc_limits: None,
             sys: Sys::new(),
             last_days_json: 0,
             days_pending: false,
@@ -409,6 +412,8 @@ struct Live<'a> {
     notetaker: Option<NotetakerOut>,
     /// Codex's own limit meter, when Codex is read and has reported one.
     codex_limit: Option<&'a crate::codex::CodexLimit>,
+    /// Claude Code's own limits, when its status line has reported them.
+    cc_limits: Option<&'a crate::cclimits::CcLimits>,
 }
 
 #[derive(Serialize)]
@@ -700,6 +705,7 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
         outside,
         notetaker: note,
         codex_limit: sh.tx.codex_limit.as_ref(),
+        cc_limits: sh.cc_limits.as_ref(),
     };
     LIVE_BUF.with(|cell| {
         let mut buf = cell.borrow_mut();
@@ -710,6 +716,83 @@ pub fn compose_live(sh: &mut Shared, now: i64) -> String {
         }
         json_string(&buf)
     })
+}
+
+// ------------------------------------------------------------ tiny brief
+
+/// The status line and the SwiftBar plugin read this instead of the whole
+/// live payload. It stays under 300 bytes and holds no thread text.
+#[derive(Serialize)]
+struct Brief {
+    plate_pct: f64,
+    week_pct: f64,
+    needs: usize,
+    eating: usize,
+    plate_resets_ms: i64,
+}
+
+fn round1(x: f64) -> f64 {
+    (x * 10.0).round() / 10.0
+}
+
+/// Weekly estimate without a browser calibration: the most recent weekly
+/// limit hit in the seven-day window is the cap reference. Zero when there
+/// is no hit to anchor it.
+fn week_estimate(sh: &Shared, now: i64) -> f64 {
+    let info = &sh.tx.week.info;
+    if info.total_w <= 0.0 {
+        return 0.0;
+    }
+    let Some(&hit) = info.hits.iter().filter(|h| **h <= now).max() else { return 0.0 };
+    let span = 7 * 24 * MS_PER_HOUR;
+    let mut cap = 0.0;
+    for d in &sh.tx.week.days {
+        for (h, v) in d.hours.iter().enumerate() {
+            let hs = d.start + h as i64 * MS_PER_HOUR;
+            if hs >= hit {
+                break;
+            }
+            if hs >= hit - span {
+                cap += v.max(0.0);
+            }
+        }
+    }
+    if cap > 0.0 { (info.total_w / cap) * 100.0 } else { 0.0 }
+}
+
+pub fn brief(sh: &Shared, now: i64) -> String {
+    let cc = sh.cc_limits.as_ref();
+    let fresh = |w: Option<crate::cclimits::CcWindow>| w.filter(|w| w.resets_ms > now);
+    let plate = fresh(cc.and_then(|c| c.five_hour));
+    let week = fresh(cc.and_then(|c| c.seven_day));
+    let (est_pct, est_reset) = sh
+        .tx
+        .window
+        .as_ref()
+        .map(|w| {
+            (
+                w.cap.as_ref().filter(|c| c.used > 0.0 && w.active).map(|c| (w.used / c.used) * 100.0).unwrap_or(0.0),
+                w.end_ms,
+            )
+        })
+        .unwrap_or((0.0, 0));
+    let plate_pct = round1(plate.map(|w| w.pct).unwrap_or(est_pct));
+    let week_pct = round1(week.map(|w| w.pct).unwrap_or_else(|| week_estimate(sh, now)));
+    let plate_resets_ms = plate.map(|w| w.resets_ms).unwrap_or(est_reset);
+    let (mut needs_set, mut eating) = (HashSet::new(), 0);
+    if let Some(t) = sh.t3.as_ref() {
+        eating = t.active.len();
+        for w in &t.waiting {
+            needs_set.insert(w.thread.as_str());
+        }
+        for r in &t.active {
+            if r.status == "waiting" {
+                needs_set.insert(r.thread.as_str());
+            }
+        }
+    }
+    let b = Brief { plate_pct, week_pct, needs: needs_set.len(), eating, plate_resets_ms };
+    serde_json::to_string(&b).unwrap_or_else(|_| "{}".into())
 }
 
 // ---------------------------------------------------------------- days
@@ -1282,6 +1365,78 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cclimits::{CcLimits, CcWindow};
+
+    const NOW: i64 = 1_700_000_000_000;
+
+    #[test]
+    fn brief_shape_and_claude_values() {
+        let mut sh = Shared::new(0);
+        sh.cc_limits = Some(CcLimits {
+            five_hour: Some(CcWindow { pct: 23.5, resets_ms: NOW + 3_600_000 }),
+            seven_day: Some(CcWindow { pct: 41.2, resets_ms: NOW + 864_000_000 }),
+            at: NOW,
+        });
+        sh.t3 = Some(T3Part {
+            waiting: vec![Waiting { thread: "t1".into(), kind: "prompt".into(), since: NOW }],
+            ..Default::default()
+        });
+        let body = brief(&sh, NOW);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v.as_object().unwrap().len(), 5);
+        for k in ["plate_pct", "week_pct", "needs", "eating", "plate_resets_ms"] {
+            assert!(v.get(k).is_some(), "missing {k}");
+        }
+        assert_eq!(v["plate_pct"], 23.5);
+        assert_eq!(v["week_pct"], 41.2);
+        assert_eq!(v["needs"], 1);
+        assert_eq!(v["eating"], 0);
+        assert_eq!(v["plate_resets_ms"], NOW + 3_600_000);
+        assert!(body.len() < 300, "brief is {} bytes", body.len());
+    }
+
+    #[test]
+    fn brief_falls_back_to_the_estimate_and_counts_runners() {
+        let mut sh = Shared::new(0);
+        sh.tx.window = Some(crate::agg::WindowEst {
+            active: true,
+            start_ms: NOW - 3_600_000,
+            end_ms: NOW + 7_200_000,
+            anchored: false,
+            used: 25.0,
+            by_family: [0.0; 4],
+            observer: 0.0,
+            calls: 10,
+            cap: Some(crate::agg::CapRef { used: 100.0, hit_ms: NOW - 86_400_000, start_ms: NOW - 90_000_000 }),
+            rate_per_min: 0.0,
+            eta_ms: None,
+        });
+        sh.t3 = Some(T3Part {
+            active: vec![crate::t3::ActiveRun {
+                run: "r1".into(), thread: "t1".into(), ordinal: 0, status: "running".into(),
+                requested: NOW, started: Some(NOW), model: None, effort: None,
+                delegated: false, step: None, tools: 0,
+            }],
+            ..Default::default()
+        });
+        let v: serde_json::Value = serde_json::from_str(&brief(&sh, NOW)).unwrap();
+        assert_eq!(v["plate_pct"], 25.0);
+        assert_eq!(v["week_pct"], 0.0);
+        assert_eq!(v["eating"], 1);
+        assert_eq!(v["needs"], 0);
+        assert_eq!(v["plate_resets_ms"], NOW + 7_200_000);
+    }
+
+    #[test]
+    fn live_payload_carries_cc_limits() {
+        let mut sh = Shared::new(0);
+        let cc = CcLimits { five_hour: Some(CcWindow { pct: 12.0, resets_ms: NOW + 60_000 }), seven_day: None, at: NOW };
+        sh.cc_limits = Some(cc.clone());
+        let v: serde_json::Value = serde_json::from_str(&compose_live(&mut sh, NOW)).unwrap();
+        assert_eq!(v["cc_limits"]["five_hour"]["pct"], 12.0);
+        assert_eq!(v["cc_limits"]["at"], NOW);
+        assert!(v["cc_limits"].get("seven_day").is_none());
+    }
 
     #[test]
     fn compose_live_reuses_buffer_and_emits_stable_json() {

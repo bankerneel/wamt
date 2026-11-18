@@ -26,6 +26,22 @@ scripts/wamt login off     # stop it and remove the login item
 scripts/wamt login status
 ```
 
+```sh
+scripts/wamt statusline on      # wrap Claude Code's statusLine with WAMT
+scripts/wamt statusline off     # put the original statusLine back
+scripts/wamt statusline status  # show the active statusLine command
+```
+
+`statusline on` backs up `~/.claude/settings.json` to `.state/settings.json.bak`,
+saves the original `statusLine` object in `.state/statusline-orig.json`, and
+points `statusLine.command` at `scripts/statusline.sh`. The wrapper feeds your
+original status line command the same stdin, appends the plate and week from
+Claude Code's own numbers, and stores only `.rate_limits` in
+`.state/cc-limits.json` for this dashboard. It adds "needs you" when a T3
+thread is waiting and the dashboard is running. Errors in the wrapper are
+swallowed so the status line never breaks. `statusline off` restores the
+saved object exactly. Only the command is ever printed, never settings values.
+
 With the login item on, `start`, `stop` and `restart` go through launchd;
 `stop` keeps it stopped until the next login. Stopping loses nothing: the next
 start reads only what changed since. The first start after an update that
@@ -38,10 +54,13 @@ changes the cache format reads the last 7 days once (about 6 s).
   Enter on it) for the thread's runs, tool counts, subagents and a 10-minute
   token timeline. Press `/` to filter by title, project, branch or model.
 - **The 5-hour plate**: how much of the window is eaten, a run-out forecast
-  from the last 30 minutes, and Codex's own limit line. "Calibrate from
-  /usage" takes the % that Claude's `/usage` shows and scales the meter to it
-  (kept in this browser only), because the meter cannot see claude.ai or other
-  devices.
+  from the last 30 minutes, and Codex's own limit line. When Claude Code's
+  status line is installed, its `rate_limits` drive the plate and the weekly
+  meter automatically: Claude's own percentage is the hero number, its reset
+  is the reset time, and the local meter is scaled to match so bars, forecasts
+  and alerts follow. Stale or missing reports fall back to the manual
+  "Calibrate from /usage" (kept in this browser only). The muted line shows
+  this Mac's own estimate.
 - **Three days** and **the week so far**: daily totals, busy hours, model mix,
   runs, PRs with CI checks, review state and API-equivalent cost, and
   "spoiled leftovers" (requests that rebuilt over 50K tokens of cache after it
@@ -88,7 +107,9 @@ changes the cache format reads the last 7 days once (about 6 s).
 - Listens on 127.0.0.1 only and refuses requests whose `Host` is not localhost.
 - The only files it writes are in `.state/`: `transcripts.json` (offsets and
   numbers, about 150 KB), `t3.json` (which thread launched which, about 10 KB),
-  `history.json` (daily totals older than the week, about 5 KB) and the log.
+  `history.json` (daily totals older than the week, about 5 KB),
+  `cc-limits.json` (Claude's own two percentages and reset times) and the log.
+  `statusline on` also writes backups of the statusLine settings there.
   Deleting `.state/` is always safe.
 
 ## How the numbers are made
@@ -109,6 +130,10 @@ changes the cache format reads the last 7 days once (about 6 s).
   visible here.
 - **Run-out forecast**: weighted usage over the last 30 minutes (idle minutes
   included, never less than 5) projected to the cap; shown only as an estimate.
+- **Claude's own limits** replace the estimate when `statusline on` is set:
+  the status line writes only `.rate_limits` to the state dir, the tailer picks
+  it up on its one-second tick when the file changes, and the page ages the
+  report to decide whether it is still fresh.
 - **Codex** usage counts in the totals as its own app and model family but not
   in the Claude plate. Its limit line is Codex's own number.
 - **Days** are local calendar days on this Mac. Seven are kept in the live
@@ -142,7 +167,24 @@ redraw. The page shows the process's own memory and CPU in the footer.
   headless Chromium container into `shots/`.
 - `WAMT_UI=ui/index.html` serves the page from disk, so UI edits need no
   rebuild.
+- `scripts/test-statusline.sh` tests the statusLine wrapper and installer with
+  a throwaway HOME and a fake dashboard. It never touches the real
+  `~/.claude`.
 - Design: `docs/design.md`. Plan: `docs/plan.md`.
+
+## Menu bar
+
+`scripts/swiftbar/wamt.30s.sh` is a SwiftBar or xbar plugin (neither app is
+installed here). Symlink it into your plugin folder, for example:
+
+```sh
+mkdir -p "$HOME/Library/Application Support/SwiftBar/Plugins"
+ln -sf "$PWD/scripts/swiftbar/wamt.30s.sh" "$HOME/Library/Application Support/SwiftBar/Plugins/wamt.30s.sh"
+```
+
+It shows the plate as `🍪 23%` and a menu with the week percentage, threads
+that need you, running threads and a link that opens the dashboard. It reads
+only `http://127.0.0.1:7317/api/brief`; with the dashboard down it shows `?`.
 
 ## The look
 
