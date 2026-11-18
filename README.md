@@ -43,8 +43,11 @@ changes the cache format reads the last 7 days once (about 6 s).
 - **Three days** and **the week so far**: daily totals, busy hours, model mix,
   runs, PRs with CI checks, review state and API-equivalent cost, and
   "spoiled leftovers" (requests that rebuilt over 50K tokens of cache after it
-  expired). "Copy yesterday" and "Copy today" copy a plain-text standup;
-  "Download CSV" saves the week's daily totals.
+  expired). Below the week, a compact 30-day strip shows one thin column per
+  day, stacked by model family, with a 30-day total; its tooltip gives the
+  date, output tokens, requests and API-equivalent dollars. "Copy yesterday"
+  and "Copy today" copy a plain-text standup; "Download CSV" saves every day
+  available, up to 30.
 - **The bill**: tokens by model and by thread; "API prices" shows what they
   would cost at API list prices (an estimate; the plan is not billed this way).
 - **Diet tips**: a Today and Yesterday tab of where tokens could be saved,
@@ -75,7 +78,8 @@ changes the cache format reads the last 7 days once (about 6 s).
 - Listens on 127.0.0.1 only and refuses requests whose `Host` is not localhost.
 - The only files it writes are in `.state/`: `transcripts.json` (offsets and
   numbers, about 150 KB), `t3.json` (which thread launched which, about 10 KB),
-  and the log. Deleting `.state/` is always safe.
+  `history.json` (daily totals older than the week, about 5 KB) and the log.
+  Deleting `.state/` is always safe.
 
 ## How the numbers are made
 
@@ -97,8 +101,13 @@ changes the cache format reads the last 7 days once (about 6 s).
   included, never less than 5) projected to the cap; shown only as an estimate.
 - **Codex** usage counts in the totals as its own app and model family but not
   in the Claude plate. Its limit line is Codex's own number.
-- **Days** are local calendar days on this Mac. Seven are kept: the last three
-  in detail, days 4 to 7 as daily totals only.
+- **Days** are local calendar days on this Mac. Seven are kept in the live
+  window: the last three in detail, days 4 to 7 as daily totals only. When a
+  day ages out, its totals move to `.state/history.json`, which keeps up to 31
+  days (no sessions, hours or dedupe keys). On a fresh start the older days
+  are read once on a low-priority background thread, from transcript files
+  last written inside that range only; the live data is never held up. The
+  month lives in its own file, so a cache rebuild never wipes it.
 
 ## Footprint
 
