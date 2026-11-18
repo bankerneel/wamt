@@ -120,6 +120,10 @@ pub struct DayAgg {
     /// Subagent transcript files first seen this day: parent session ->
     /// "agentType|model" -> count.
     pub subs: BTreeMap<String, BTreeMap<String, u32>>,
+    /// Captured while the day still had session detail, so compacted days
+    /// keep their project attribution. Already folded to the top twelve.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub projects: BTreeMap<String, crate::projects::ProjUse>,
 }
 
 impl Default for DayAgg {
@@ -131,6 +135,7 @@ impl Default for DayAgg {
             sessions: HashMap::new(),
             active: [0; 5],
             subs: BTreeMap::new(),
+            projects: BTreeMap::new(),
         }
     }
 }

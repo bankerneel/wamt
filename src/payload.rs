@@ -6,8 +6,9 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::agg::{ColdUse, DayAgg, Use, WeekDay, WindowEst};
+use crate::agg::{ColdUse, DayAgg, Use, WeekDay, WindowEst, WEEK_DAYS};
 use crate::history::{History, MONTH_DAYS};
+use crate::projects::{self, ProjectMap, NO_PROJECT};
 use crate::sys::{memory_bytes, Sys};
 use crate::t3::{ActiveRun, Ctx, Pr, RunRow, Subagent, ThreadMeta, Waiting};
 use crate::tail::{SessionInfo, TailStats};
@@ -37,6 +38,10 @@ pub struct TxPart {
     pub week: WeekPart,
     /// The 30-day strip: history days plus the seven kept days.
     pub month: Vec<MonthDayOut>,
+    /// Per-project maps for history days (older than the seven kept).
+    pub history_projects: Arc<BTreeMap<i32, ProjectMap>>,
+    /// Captured maps for the compacted days inside the seven-day window.
+    pub week_projects: Arc<BTreeMap<i32, ProjectMap>>,
     pub sessions: Arc<HashMap<String, SessionInfo>>,
     pub window: Option<WindowEst>,
     pub spark_start: i64,
@@ -155,6 +160,106 @@ fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
 
+/// One row of the "Who ate it, by project" plate. Dollars are weight / 1e6.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct ProjectOut {
+    pub name: String,
+    pub w30: f64,
+    pub w7: f64,
+    pub n30: u64,
+    pub out30: u64,
+    /// PRs linked from this project's threads inside the 30-day window.
+    pub prs: usize,
+    /// How many of those are merged.
+    pub merged: usize,
+    /// Weighted units per day, oldest first, exactly thirty values.
+    pub days: Vec<f64>,
+}
+
+#[derive(Default)]
+struct ProjectAcc {
+    w30: f64,
+    w7: f64,
+    n30: u64,
+    out30: u64,
+    days: Vec<f64>,
+    prs: HashSet<(String, i64)>,
+    merged: HashSet<(String, i64)>,
+}
+
+/// The 30-day rollup: history days plus the seven kept days, per project,
+/// sorted by weight and capped at fifteen rows. PRs are counted from T3
+/// thread metadata only; a PR linked by two threads of one project is counted
+/// once there.
+pub fn build_projects(sh: &Shared, now: i64) -> Vec<ProjectOut> {
+    let today = day_of(now, sh.off);
+    let start = day_start_ms(today - (MONTH_DAYS - 1), sh.off);
+    let empty_threads = HashMap::new();
+    let empty_map = HashMap::new();
+    let threads = sh.t3.as_ref().map(|t| t.threads.as_ref()).unwrap_or(&empty_threads);
+    let smap = sh.t3.as_ref().map(|t| t.sessions.as_ref()).unwrap_or(&empty_map);
+
+    let mut acc: BTreeMap<String, ProjectAcc> = BTreeMap::new();
+    for back in 0..MONTH_DAYS {
+        let day = today - back;
+        let map: ProjectMap = if day >= today - (WEEK_DAYS - 1) {
+            sh.tx
+                .days
+                .iter()
+                .find(|(d, _)| *d == day)
+                .and_then(|(_, a)| if a.sessions.is_empty() { None } else { Some(projects_from_day(a, &sh.tx.sessions, threads, smap)) })
+                .or_else(|| sh.tx.week_projects.get(&day).cloned())
+                .unwrap_or_default()
+        } else {
+            sh.tx.history_projects.get(&day).cloned().unwrap_or_default()
+        };
+        let idx = (MONTH_DAYS - 1 - back) as usize;
+        for (name, u) in map {
+            let e = acc.entry(name).or_insert_with(|| ProjectAcc { days: vec![0.0; MONTH_DAYS as usize], ..Default::default() });
+            e.w30 += u.w;
+            e.n30 += u.n;
+            e.out30 += u.out;
+            if back < WEEK_DAYS {
+                e.w7 += u.w;
+            }
+            if idx < e.days.len() {
+                e.days[idx] += u.w;
+            }
+        }
+    }
+
+    for th in threads.values() {
+        let name = th.project.clone().unwrap_or_else(|| NO_PROJECT.to_string());
+        for p in &th.prs {
+            if p.linked < start || p.linked > now {
+                continue;
+            }
+            let e = acc.entry(name.clone()).or_insert_with(|| ProjectAcc { days: vec![0.0; MONTH_DAYS as usize], ..Default::default() });
+            let key = (p.repo.clone(), p.n);
+            if e.prs.insert(key.clone()) && p.state.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("merged")) {
+                e.merged.insert(key);
+            }
+        }
+    }
+
+    let mut out: Vec<ProjectOut> = acc
+        .into_iter()
+        .map(|(name, e)| ProjectOut {
+            name,
+            w30: round2(e.w30),
+            w7: round2(e.w7),
+            n30: e.n30,
+            out30: e.out30,
+            prs: e.prs.len(),
+            merged: e.merged.len(),
+            days: e.days.into_iter().map(round2).collect(),
+        })
+        .collect();
+    out.sort_by(|a, b| b.w30.partial_cmp(&a.w30).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.name.cmp(&b.name)));
+    out.truncate(15);
+    out
+}
+
 /// Short display forms for the tip lines: "612K", "1.2M".
 fn big_num(n: f64) -> String {
     let n = n.max(0.0);
@@ -267,7 +372,7 @@ pub enum App {
     Other,
 }
 
-fn app_of(session: &str, info: Option<&SessionInfo>, map: &HashMap<String, String>) -> App {
+pub(crate) fn app_of(session: &str, info: Option<&SessionInfo>, map: &HashMap<String, String>) -> App {
     if map.contains_key(session) {
         return App::T3;
     }
@@ -299,6 +404,39 @@ fn session_label(session: &str, info: Option<&SessionInfo>) -> String {
         }
     }
     session.chars().take(8).collect()
+}
+
+/// Rolls one day's sessions up by project, the same way `compose_days`
+/// builds its source list: a T3 session takes its thread's project title,
+/// everything else takes the session's working-folder name. A session's
+/// models already carry their weight; Codex models have weight 0 and still
+/// contribute requests and output tokens.
+pub fn projects_from_day(
+    agg: &DayAgg,
+    sessions: &HashMap<String, SessionInfo>,
+    threads: &HashMap<String, ThreadMeta>,
+    smap: &HashMap<String, String>,
+) -> ProjectMap {
+    let mut full = ProjectMap::new();
+    for (sid, s) in &agg.sessions {
+        let info = sessions.get(sid);
+        let (is_t3, project, cwd) = match app_of(sid, info, smap) {
+            App::T3 => {
+                let th = smap.get(sid).map(String::as_str).unwrap_or("");
+                (true, threads.get(th).and_then(|m| m.project.as_deref()), None)
+            }
+            _ => (false, None, info.and_then(|i| i.cwd.as_deref())),
+        };
+        let name = projects::attribute(is_t3, project, cwd);
+        let (mut w, mut n, mut out) = (0.0, 0, 0);
+        for u in s.models.values() {
+            w += u.w;
+            n += u.n;
+            out += u.t.output;
+        }
+        projects::add(&mut full, &name, w, n, out);
+    }
+    projects::fold(&full)
 }
 
 // ---------------------------------------------------------------- live
@@ -905,6 +1043,8 @@ struct Days<'a> {
     week_info: &'a WeekInfo,
     /// Oldest first: history days plus the seven kept days, at most 30.
     month: &'a [MonthDayOut],
+    /// Per-project rollup over the same 30 days, heaviest first, at most 15.
+    projects: Vec<ProjectOut>,
     /// USD per million tokens (input, output, cache read) for each priced
     /// model in these days; the bill's API-equivalent view explains itself
     /// with these. Unpriced (Codex) models are left out.
@@ -1350,7 +1490,8 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
             }
         }
     }
-    let doc = Days { now, days, week: &sh.tx.week.days, week_info: &sh.tx.week.info, month: &sh.tx.month, prices };
+    let projects = build_projects(sh, now);
+    let doc = Days { now, days, week: &sh.tx.week.days, week_info: &sh.tx.week.info, month: &sh.tx.month, projects, prices };
     DAYS_BUF.with(|cell| {
         let mut buf = cell.borrow_mut();
         buf.clear();
@@ -1572,6 +1713,7 @@ mod tests {
                 fam: [1.0, 0.0, 0.0, 0.0],
                 codex_tokens: 3,
                 active_min: 5,
+                projects: ProjectMap::new(),
             });
         }
         let m = build_month(&h, &week, today);
@@ -1584,6 +1726,66 @@ mod tests {
         for k in ["day", "t", "n", "w", "fam", "codex_tokens", "active_min"] {
             assert!(v.get(k).is_some(), "{k}");
         }
+    }
+
+    #[test]
+    fn projects_payload_counts_prs_per_project_and_thirty_days() {
+        use crate::t3::Pr;
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        let mut sh = Shared::new(OFF);
+        let pr = |n, state: &str| Pr { n, repo: "o/r".into(), linked: now - MS_PER_HOUR, state: Some(state.into()), ..Default::default() };
+        let mut threads = HashMap::new();
+        threads.insert("a".to_string(), ThreadMeta { id: "a".into(), project: Some("Alpha".into()), prs: vec![pr(1, "merged"), pr(2, "open")], ..Default::default() });
+        threads.insert("b".to_string(), ThreadMeta { id: "b".into(), project: Some("Alpha".into()), prs: vec![pr(1, "merged"), pr(3, "merged")], ..Default::default() });
+        threads.insert("c".to_string(), ThreadMeta { id: "c".into(), prs: vec![pr(4, "merged")], ..Default::default() });
+        // A PR linked before the window must not be counted.
+        threads.insert("d".to_string(), ThreadMeta { id: "d".into(), project: Some("Alpha".into()), prs: vec![Pr { n: 9, repo: "o/r".into(), linked: day_start_ms(today - 31, OFF), state: Some("merged".into()), ..Default::default() }], ..Default::default() });
+        sh.t3 = Some(T3Part { threads: Arc::new(threads), ..Default::default() });
+        let mut hp = BTreeMap::new();
+        let mut pm = ProjectMap::new();
+        projects::add(&mut pm, "Alpha", 3.0, 4, 50);
+        hp.insert(today - 10, pm);
+        sh.tx.history_projects = Arc::new(hp);
+        let out = build_projects(&sh, now);
+        let alpha = out.iter().find(|p| p.name == "Alpha").unwrap();
+        assert_eq!(alpha.prs, 3, "{:?}", alpha); // #1, #2, #3, deduped across threads
+        assert_eq!(alpha.merged, 2);
+        assert_eq!(alpha.w30, 3.0);
+        assert_eq!(alpha.n30, 4);
+        assert_eq!(alpha.out30, 50);
+        assert_eq!(alpha.days.len(), MONTH_DAYS as usize);
+        assert_eq!(alpha.days[19], 3.0);
+        let none = out.iter().find(|p| p.name == NO_PROJECT).unwrap();
+        assert_eq!((none.prs, none.merged), (1, 1));
+        assert_eq!(out[0].name, "Alpha");
+        // The days payload carries the rollup under a known key.
+        let v = serde_json::to_value(&out[0]).unwrap();
+        for k in ["name", "w30", "w7", "n30", "out30", "prs", "merged", "days"] {
+            assert!(v.get(k).is_some(), "{k}");
+        }
+    }
+
+    #[test]
+    fn projects_from_day_joins_t3_threads_and_session_folders() {
+        use crate::agg::SessionDay;
+        let mut agg = DayAgg::default();
+        let mut t3s = SessionDay::default();
+        t3s.models.insert("claude-opus-5-5".into(), Use { n: 2, t: Tokens { output: 20, ..Default::default() }, w: 5.0 });
+        let mut other = SessionDay::default();
+        other.models.insert("claude-sonnet-5-5".into(), Use { n: 1, t: Tokens { output: 10, ..Default::default() }, w: 2.0 });
+        agg.sessions.insert("t3session".into(), t3s);
+        agg.sessions.insert("outside".into(), other);
+        let mut sessions = HashMap::new();
+        sessions.insert("outside".into(), SessionInfo { cwd: Some("/Users/x/demo".into()), ..Default::default() });
+        let mut threads = HashMap::new();
+        threads.insert("th".to_string(), ThreadMeta { id: "th".into(), project: Some("Dashboard".into()), ..Default::default() });
+        let smap: HashMap<String, String> = [("t3session".to_string(), "th".to_string())].into();
+        let p = projects_from_day(&agg, &sessions, &threads, &smap);
+        assert_eq!(p["Dashboard"].w, 5.0);
+        assert_eq!(p["Dashboard"].out, 20);
+        assert_eq!(p["demo"].w, 2.0);
+        assert_eq!(p["demo"].out, 10);
     }
 
     // ---------------------------------------------------------------- tips

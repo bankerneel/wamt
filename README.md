@@ -84,6 +84,12 @@ changes the cache format reads the last 7 days once (about 6 s).
   session concurrency, marathon sessions, Opus subagents, spoiled cache and
   the note-taker's share. Each tip names the threads and their share and
   API-equivalent cost. No message content is read.
+- **Who ate it, by project**: a 30-day rollup by T3 project title, or by
+  working-folder name outside T3. A table shows API-equivalent dollars, share,
+  the last seven days, requests, output tokens, linked and merged PRs, a rough
+  dollars-per-merged-PR figure and a small 30-day trend. Dollars are estimates
+  at list prices, not what the plan bills. The month keeps at most twelve
+  projects per day; the rest fold into "Other".
 - **Alerts without looking**: the tab title and favicon show the plate and
   anything waiting on you. "Notify me" turns on desktop notifications for: a
   thread waiting on you, its prompt cache about to go cold, a thread passing
