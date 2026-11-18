@@ -10,10 +10,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use crate::agg::DayAgg;
+use crate::projects::{self, ProjectMap};
 use crate::transcript::{family, Tokens};
 
 /// Version of `.state/history.json`, independent of `CACHE_VERSION`.
-pub const HISTORY_VERSION: u32 = 1;
+/// Bumped when days gained per-project maps: an older file is discarded and
+/// the low-priority backfill reads those days again once.
+pub const HISTORY_VERSION: u32 = 2;
 /// At most 31 entries: a full month plus one day of slack.
 pub const HISTORY_MAX: usize = 31;
 /// The month is the most recent 30 local days, today included.
@@ -37,12 +40,21 @@ pub struct HistDay {
     pub fam: [f64; 4],
     pub codex_tokens: u64,
     pub active_min: u32,
+    /// Top twelve projects by weight on that day, rest folded into "Other".
+    #[serde(default)]
+    pub projects: ProjectMap,
 }
 
 impl HistDay {
     /// Takes a day that is about to be pruned from the seven-day window.
     pub fn from_agg(day: i32, agg: &DayAgg, codex_tokens: u64) -> Self {
-        let mut out = HistDay { day, codex_tokens, active_min: agg.active_slots() * 5, ..Default::default() };
+        let mut out = HistDay {
+            day,
+            codex_tokens,
+            active_min: agg.active_slots() * 5,
+            projects: projects::fold(&agg.projects),
+            ..Default::default()
+        };
         out.add_agg(agg);
         out
     }
@@ -220,6 +232,30 @@ mod tests {
         assert_eq!(History::load(&hp), h);
         let mut t = crate::tail::Tailer::new(dir.clone(), OFF);
         assert!(!t.restore(bumped), "the bumped cache is refused");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_history_version_change_discards_the_old_file() {
+        let dir = std::env::temp_dir().join(format!("sb-histver-{}-{TODAY}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let hp = dir.join("history.json");
+        // A file written by the previous version holds totals but no projects.
+        state::save(&hp, &serde_json::json!({
+            "v": HISTORY_VERSION - 1,
+            "days": [{ "day": TODAY - 10, "t": [1, 2, 3, 4, 5], "n": 1, "w": 12.5 }],
+        })).unwrap();
+        let loaded = History::load(&hp);
+        assert_eq!(loaded.v, HISTORY_VERSION);
+        assert!(loaded.days.is_empty(), "the old days are discarded so backfill refills them");
+        // A current file round trips its per-project map.
+        let mut fresh = History { v: HISTORY_VERSION, days: Vec::new() };
+        let mut p = ProjectMap::new();
+        projects::add(&mut p, "demo", 2.0, 3, 40);
+        assert!(fresh.upsert(HistDay { day: TODAY - 10, projects: p.clone(), ..Default::default() }));
+        state::save(&hp, &fresh).unwrap();
+        assert_eq!(History::load(&hp), fresh);
         fs::remove_dir_all(dir).ok();
     }
 }

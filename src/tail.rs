@@ -105,7 +105,7 @@ pub struct Tailer {
 }
 
 /// What a path is, judged from where it sits under the root.
-fn classify(root: &Path, path: &Path) -> Option<(String, bool, bool)> {
+pub(crate) fn classify(root: &Path, path: &Path) -> Option<(String, bool, bool)> {
     let rel = path.strip_prefix(root).ok()?;
     let parts: Vec<&str> = rel.iter().filter_map(|p| p.to_str()).collect();
     let obs = parts.first().is_some_and(|p| p.contains("claude-mem-observer"));

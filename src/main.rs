@@ -10,6 +10,7 @@ mod history;
 mod http;
 mod hub;
 mod payload;
+mod projects;
 mod state;
 mod sys;
 mod t3;
@@ -20,12 +21,12 @@ mod transcript;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::agg::{DayAgg, WEEK_DAYS};
+use crate::agg::{DayAgg, DETAIL_DAYS, WEEK_DAYS};
 use crate::feed::FeedBuilder;
 use crate::hub::Hub;
 use crate::payload::{build_week, compose_days, compose_live, Shared, T3Part};
@@ -447,6 +448,53 @@ fn merge_codex_day(into: &mut DayAgg, cx: &DayAgg) {
     }
 }
 
+/// Captures a day's per-project rollup while its sessions are still there,
+/// before `prune` drops them. A compacted day then keeps its attribution in
+/// `DayAgg.projects`, and the day roll copies it into the history file.
+fn capture_projects(t: &mut tail::Tailer, shared: &Mutex<Shared>, day: i32) {
+    let sh = shared.lock().unwrap();
+    let empty_t: HashMap<String, t3::ThreadMeta> = HashMap::new();
+    let empty_s: HashMap<String, String> = HashMap::new();
+    let (threads, smap) = sh.t3.as_ref().map(|p| (p.threads.as_ref(), p.sessions.as_ref())).unwrap_or((&empty_t, &empty_s));
+    for (d, a) in t.agg.days.iter_mut() {
+        if *d <= day - DETAIL_DAYS && !a.sessions.is_empty() && a.projects.is_empty() {
+            a.projects = payload::projects_from_day(a, &t.sessions, threads, smap);
+        }
+    }
+}
+
+/// Starts the low-priority month read on its own thread. The snapshot maps
+/// Claude session ids to T3 project titles, or to "No project" where a T3
+/// thread has no title. Only ids and names cross into the thread.
+fn spawn_backfill(
+    root: &Path,
+    codex_root: &Path,
+    off: i32,
+    day: i32,
+    have: HashSet<i32>,
+    session_projects: HashMap<String, String>,
+) -> mpsc::Receiver<backfill::BackfillResult> {
+    let (bx, cr) = (root.to_path_buf(), codex_root.to_path_buf());
+    let (tx, rx) = mpsc::channel();
+    thread::Builder::new().name("backfill".into()).stack_size(1 << 20).spawn(move || {
+        backfill::set_low_priority();
+        let r = backfill::backfill(&bx, cr.is_dir().then_some(cr.as_path()), off, day, &have, &session_projects);
+        log(format!(
+            "history backfill: {} days, {} ms, {} MB read",
+            r.days.len(),
+            r.ms,
+            r.bytes / 1_000_000
+        ));
+        let released = sys::release_free_memory();
+        if released > 0 {
+            log(format!("backfill returned {} MB to macOS", released / 1_048_576));
+        }
+        let _ = tx.send(r);
+    })
+    .unwrap();
+    rx
+}
+
 fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hub: Arc<Hub>) {
     let cache_path = state_dir.join("transcripts.json");
     let history_path = state_dir.join("history.json");
@@ -478,6 +526,8 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
     let mut week_part = payload::WeekPart::default();
     let mut month_part: Vec<payload::MonthDayOut> = Vec::new();
     let mut backfill_rx: Option<mpsc::Receiver<backfill::BackfillResult>> = None;
+    let mut backfill_pending = false;
+    let mut first_scan_ms = 0i64;
     let mut rebuild = false;
     let mut first = true;
     loop {
@@ -487,6 +537,42 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
         // buckets, per-session lines) only for the newest three days.
         let window_start = day_start_ms(day - (WEEK_DAYS - 1), off);
         let detail_start = day_start_ms(day - 2, off);
+        // Project names come from T3 metadata. Wait for it briefly before
+        // compacting a day's sessions or starting the one-time month read;
+        // after a minute, fall back to folder names rather than wait forever.
+        let meta_ready = shared.lock().unwrap().t3.is_some() || (first_scan_ms > 0 && now - first_scan_ms > 60_000);
+        if first_scan_ms > 0
+            && meta_ready
+            && t.agg.days.iter().any(|(d, a)| *d <= day - DETAIL_DAYS && !a.sessions.is_empty())
+        {
+            capture_projects(&mut t, &shared, day);
+            t.agg.prune(day - (WEEK_DAYS - 1), now, off);
+            t.prune_sessions(detail_start);
+            if let Some(c) = cx.as_mut() {
+                c.prune(day, detail_start, now);
+            }
+            last_prune = now;
+            rebuild = true;
+        }
+        if backfill_pending && meta_ready {
+            let have: HashSet<i32> = history.days.iter().map(|d| d.day).collect();
+            if !backfill::missing_days(day, &have).is_empty() {
+                let session_projects: HashMap<String, String> = {
+                    let sh = shared.lock().unwrap();
+                    sh.t3.as_ref().map(|p| {
+                        p.sessions
+                            .iter()
+                            .map(|(sid, th)| {
+                                let project = p.threads.get(th).and_then(|m| m.project.clone()).unwrap_or_else(|| projects::NO_PROJECT.to_string());
+                                (sid.clone(), project)
+                            })
+                            .collect()
+                    }).unwrap_or_default()
+                };
+                backfill_rx = Some(spawn_backfill(&root, &codex_root, off, day, have, session_projects));
+            }
+            backfill_pending = false;
+        }
         let mut force = first;
         if day != today || now - last_prune > 60_000 {
             if day != today {
@@ -497,6 +583,7 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
             // A day leaving the window becomes a totals-only month entry.
             // Do this before prune drops it. The file is written only when
             // something actually moved, which happens once a day at most.
+            capture_projects(&mut t, &shared, day);
             let cxd: HashMap<i32, u64> = cx
                 .as_ref()
                 .map(|c| c.agg.days.iter().map(|(d, a)| (*d, a.total().t.total())).collect())
@@ -546,44 +633,18 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
             };
         }
         if first {
-            // Right after the startup scan: compact days 4 to 7 and drop what
-            // only they needed (the scan itself already skips their detail).
-            t.agg.prune(day - (WEEK_DAYS - 1), now, off);
-            t.prune_sessions(detail_start);
-            if let Some(c) = cx.as_mut() {
-                c.prune(day, detail_start, now);
-            }
-            last_prune = now;
+            first_scan_ms = now;
             log(format!(
                 "transcripts ready in {} ms: {} files tracked, {} MB read",
                 t0.elapsed().as_millis(),
                 t.stats.files,
                 t.stats.bytes_read / 1_000_000
             ));
-            // Fill older days on a separate low-priority thread. The live
-            // tailer keeps reading, publishing and saving while this runs.
+            // Fill older days on a separate low-priority thread, once T3's
+            // project titles are available for attribution. The live tailer
+            // keeps reading, publishing and saving while this runs.
             let have: HashSet<i32> = history.days.iter().map(|d| d.day).collect();
-            if !backfill::missing_days(day, &have).is_empty() {
-                let (bx, cr) = (root.clone(), codex_root.clone());
-                let (tx, rx) = mpsc::channel();
-                thread::Builder::new().name("backfill".into()).stack_size(1 << 20).spawn(move || {
-                    backfill::set_low_priority();
-                    let r = backfill::backfill(&bx, cr.is_dir().then_some(cr.as_path()), off, day, &have);
-                    log(format!(
-                        "history backfill: {} days, {} ms, {} MB read",
-                        r.days.len(),
-                        r.ms,
-                        r.bytes / 1_000_000
-                    ));
-                    let released = sys::release_free_memory();
-                    if released > 0 {
-                        log(format!("backfill returned {} MB to macOS", released / 1_048_576));
-                    }
-                    let _ = tx.send(r);
-                })
-                .unwrap();
-                backfill_rx = Some(rx);
-            }
+            backfill_pending = !backfill::missing_days(day, &have).is_empty();
         }
         // Pick up a finished backfill without waiting for it: try_recv never
         // blocks the live data.
@@ -661,6 +722,8 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
                 sh.tx.days = days_arc.clone();
                 sh.tx.week = week_part.clone();
                 sh.tx.month = month_part.clone();
+                sh.tx.history_projects = Arc::new(history.days.iter().map(|d| (d.day, d.projects.clone())).collect());
+                sh.tx.week_projects = Arc::new(t.agg.days.iter().filter(|(_, a)| !a.projects.is_empty()).map(|(d, a)| (*d, a.projects.clone())).collect());
                 sh.tx.sessions = Arc::new(sessions);
                 sh.tx.window = Some(window);
                 sh.tx.spark_start = start;

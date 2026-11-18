@@ -7,7 +7,7 @@
 //! No message content is kept. Reads use F_NOCACHE so the month never pushes
 //! the owner's apps out of memory.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -16,7 +16,8 @@ use std::time::Instant;
 use crate::agg::{fnv64, WEEK_DAYS};
 use crate::codex::{self, CLine};
 use crate::history::{HistDay, BACKFILL_NEWEST, BACKFILL_OLDEST};
-use crate::tail::{drop_cache, mtime_ms, no_cache, CHUNK, MAX_LINE};
+use crate::projects::{self, ProjectMap, NO_PROJECT};
+use crate::tail::{classify, drop_cache, mtime_ms, no_cache, CHUNK, MAX_LINE};
 use crate::timeutil::{civil_from_days, day_of, day_start_ms, MS_PER_MIN};
 use crate::transcript::{family, parse_line, weight, LineKind, Tokens};
 
@@ -52,21 +53,24 @@ struct Acc {
     w: f64,
     fam: [f64; 4],
     active: [u64; 5],
+    projects: ProjectMap,
 }
 
 impl Acc {
-    fn add(&mut self, tok: &Tokens, model: &str, fast: bool, ts_ms: i64, day: i32, off: i32) {
+    fn add(&mut self, tok: &Tokens, model: &str, fast: bool, ts_ms: i64, day: i32, off: i32, project: &str, codex: bool) {
         self.t[0] += tok.input;
         self.t[1] += tok.output;
         self.t[2] += tok.cache_read;
         self.t[3] += tok.cache_w5m;
         self.t[4] += tok.cache_w1h;
         self.n += 1;
-        let w = weight(model, tok, fast);
+        // Codex has no list price here: tokens only, never weight.
+        let w = if codex { 0.0 } else { weight(model, tok, fast) };
         self.w += w;
         self.fam[family(model)] += w;
         let slot = ((ts_ms - day_start_ms(day, off)) / (5 * MS_PER_MIN)).clamp(0, 287) as usize;
         self.active[slot / 64] |= 1u64 << (slot % 64);
+        projects::add(&mut self.projects, project, w, 1, tok.output);
     }
 
     fn into_day(self, day: i32, codex_tokens: u64) -> HistDay {
@@ -78,6 +82,7 @@ impl Acc {
             fam: self.fam,
             codex_tokens,
             active_min: self.active.iter().map(|w| w.count_ones()).sum::<u32>() * 5,
+            projects: projects::fold(&self.projects),
         }
     }
 }
@@ -151,7 +156,16 @@ fn in_file_range(mtime: i64, from: i64, to: i64) -> bool {
 
 /// Fills every missing day. `codex_root` is optional; when present, its day
 /// folders and the sibling archived sessions are read the same way.
-pub fn backfill(root: &Path, codex_root: Option<&Path>, off: i32, today: i32, have: &HashSet<i32>) -> BackfillResult {
+/// `session_projects` is a snapshot of Claude session id to T3 project title
+/// (or "No project"); only ids and names, never titles of threads or paths.
+pub fn backfill(
+    root: &Path,
+    codex_root: Option<&Path>,
+    off: i32,
+    today: i32,
+    have: &HashSet<i32>,
+    session_projects: &HashMap<String, String>,
+) -> BackfillResult {
     let t0 = Instant::now();
     let mut out = BackfillResult { days: Vec::new(), bytes: 0, ms: 0 };
     let missing = missing_days(today, have);
@@ -172,6 +186,9 @@ pub fn backfill(root: &Path, codex_root: Option<&Path>, off: i32, today: i32, ha
         if !in_file_range(mtime_ms(&meta), from, to) {
             continue;
         }
+        // The folder name comes from the transcript's cwd metadata on the
+        // line itself. Only its basename is ever stored.
+        let Some((session, _, _)) = classify(root, &path) else { continue };
         read_all(&path, &mut out.bytes, |line| {
             let Some(l) = parse_line(line, false) else { return };
             if l.kind != LineKind::Usage {
@@ -186,7 +203,10 @@ pub fn backfill(root: &Path, codex_root: Option<&Path>, off: i32, today: i32, ha
                 return;
             }
             let model = l.model.as_deref().unwrap_or("unknown");
-            acc.entry(day).or_default().add(&l.tokens, model, l.fast, l.ts_ms, day, off);
+            let project = session_projects.get(&session).cloned().unwrap_or_else(|| {
+                l.cwd.as_deref().map(projects::folder_name).filter(|s| !s.is_empty()).unwrap_or(NO_PROJECT).to_string()
+            });
+            acc.entry(day).or_default().add(&l.tokens, model, l.fast, l.ts_ms, day, off, &project, false);
         });
     }
     // The temporary dedupe set goes out of scope here, before Codex is read.
@@ -202,6 +222,9 @@ pub fn backfill(root: &Path, codex_root: Option<&Path>, off: i32, today: i32, ha
         }
         list_rollouts(&base.join("archived_sessions"), &mut cx_paths);
         let mut cx_seen: HashSet<u64> = HashSet::new();
+        // Meta lines name the session and its folder; both are short. The
+        // folder is already reduced to a basename by the Codex parser.
+        let mut cx_meta: HashMap<u64, (String, String)> = HashMap::new();
         for path in cx_paths {
             let Ok(meta) = fs::metadata(&path) else { continue };
             if !in_file_range(mtime_ms(&meta), from, to) {
@@ -209,19 +232,32 @@ pub fn backfill(root: &Path, codex_root: Option<&Path>, off: i32, today: i32, ha
             }
             let tag = fnv64(&path.to_string_lossy());
             read_all(&path, &mut out.bytes, |line| {
-                let Some(CLine::Usage { ts_ms, response_id, tokens }) = codex::parse_line(line) else { return };
-                let day = day_of(ts_ms, off);
-                if !want.contains(&day) {
-                    return;
+                match codex::parse_line(line) {
+                    Some(CLine::Meta { id, session_id, cwd, .. }) => {
+                        cx_meta.insert(tag, (session_id.or(id).unwrap_or_default(), cwd.unwrap_or_default()));
+                    }
+                    Some(CLine::Usage { ts_ms, response_id, tokens }) => {
+                        let day = day_of(ts_ms, off);
+                        if !want.contains(&day) {
+                            return;
+                        }
+                        let key = match response_id {
+                            Some(id) => fnv64(&id),
+                            None => fnv64(&format!("{}|{}|{}", tag, ts_ms, tokens.total())),
+                        };
+                        if !cx_seen.insert(key) {
+                            return;
+                        }
+                        let (sid, folder) = cx_meta.get(&tag).cloned().unwrap_or_default();
+                        let project = session_projects.get(&sid).cloned().unwrap_or_else(|| {
+                            let name = projects::folder_name(&folder);
+                            if name.is_empty() { NO_PROJECT.to_string() } else { name.to_string() }
+                        });
+                        acc.entry(day).or_default().add(&tokens, "codex", false, ts_ms, day, off, &project, true);
+                        *cx_totals.entry(day).or_default() += tokens.total();
+                    }
+                    _ => {}
                 }
-                let key = match response_id {
-                    Some(id) => fnv64(&id),
-                    None => fnv64(&format!("{}|{}|{}", tag, ts_ms, tokens.total())),
-                };
-                if !cx_seen.insert(key) {
-                    return;
-                }
-                *cx_totals.entry(day).or_default() += tokens.total();
             });
         }
     }
@@ -294,7 +330,7 @@ mod tests {
 
         let mut have = HashSet::new();
         have.insert(present); // history already has today - 9
-        let res = backfill(&root, None, OFF, TODAY, &have);
+        let res = backfill(&root, None, OFF, TODAY, &have, &HashMap::new());
         assert_eq!(res.days.len(), 1, "{:?}", res.days);
         assert_eq!(res.days[0].day, missing);
         assert_eq!(res.days[0].t[1], 100);
@@ -304,8 +340,29 @@ mod tests {
 
         // A file written today is never read, even if it holds old lines.
         set_mtime(&f, day_start_ms(TODAY, OFF) + MS_PER_HOUR);
-        let res = backfill(&root, None, OFF, TODAY, &have);
+        let res = backfill(&root, None, OFF, TODAY, &have, &HashMap::new());
         assert!(res.days.is_empty());
+    }
+
+    #[test]
+    fn backfill_attributes_projects_from_t3_or_the_folder_name() {
+        let root = tmp("projects");
+        let f = root.join("-Users-x-projects-demo/s2.jsonl");
+        let stamp = crate::timeutil::iso_ms(day_start_ms(TODAY - 12, OFF) + 5 * MS_PER_HOUR);
+        // One T3 session and one outside session. cwd is metadata only; only
+        // its basename may be kept.
+        let with_cwd = |s: String| s.replace("{\"type\":\"assistant\",", "{\"type\":\"assistant\",\"cwd\":\"/Users/x/projects/outside/\",");
+        append(&f, &(with_cwd(line("t3msg", &stamp, 100)) + &with_cwd(line("cxmsg", &stamp, 50))));
+        set_mtime(&f, day_start_ms(TODAY - 12, OFF) + MS_PER_HOUR);
+        let map: HashMap<String, String> = [("s2".to_string(), "HQ".to_string())].into();
+        let res = backfill(&root, None, OFF, TODAY, &HashSet::new(), &map);
+        assert_eq!(res.days.len(), 1);
+        let p = &res.days[0].projects;
+        assert_eq!(p["HQ"].out, 150);
+        assert!(!p.contains_key("outside"), "a T3 session uses the project title");
+        // Without the T3 snapshot the same session falls back to its folder.
+        let res = backfill(&root, None, OFF, TODAY, &HashSet::new(), &HashMap::new());
+        assert_eq!(res.days[0].projects["outside"].out, 150);
     }
 
     #[test]
