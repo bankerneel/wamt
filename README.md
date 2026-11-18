@@ -16,6 +16,8 @@ scripts/wamt status    # pid, memory, CPU
 scripts/wamt open      # open the page in the browser
 scripts/wamt logs      # last log lines
 scripts/wamt stop
+scripts/wamt update    # test in Docker, rebuild, restart and health-check
+scripts/wamt update --no-docker   # skip the Docker test and Linux build
 ```
 
 ```sh

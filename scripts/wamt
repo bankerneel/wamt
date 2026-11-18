@@ -1,14 +1,15 @@
 #!/bin/sh
 # Start, stop or check Who Ate My Tokens on this Mac.
-# Usage: scripts/wamt start | stop | restart | status | open | logs | build
+# Usage: scripts/wamt start | stop | restart | status | open | logs | build | update [--no-docker]
 #        scripts/wamt login on | off | status   (start at login via launchd)
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/target/release/wamt"
+PREV="$ROOT/target/release/wamt.prev"
 STATE="$ROOT/.state"
 PIDF="$STATE/wamt.pid"
 LOG="$STATE/wamt.log"
-URL="http://127.0.0.1:7317"
+URL="${WAMT_URL:-http://127.0.0.1:7317}"
 LABEL="io.github.bankerneel.wamt"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 DOMAIN="gui/$(id -u)"
@@ -43,7 +44,116 @@ write_plist() {
 PL
 }
 
+# Dry-run prints each step instead of running it. WAMT_URL overrides the probe URL.
+dry() { [ "${WAMT_DRY_RUN:-0}" = "1" ]; }
+run() {
+  if dry; then printf '[dry-run]'; printf ' %s' "$@"; printf '\n'; else "$@"; fi
+}
+note() { if dry; then printf '[dry-run] %s\n' "$*"; fi; }
+
+health_ok() {
+  curl -fsS "$URL/healthz" >/dev/null 2>&1 || return 1
+  curl -fsS "$URL/api/state" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if d.get("live", {}).get("health", {}).get("t3") == "ok" else 1)
+' >/dev/null 2>&1
+}
+health_wait() {
+  n=0
+  while [ "$n" -lt 20 ]; do
+    if health_ok; then return 0; fi
+    n=$((n + 1))
+    sleep 1
+  done
+  return 1
+}
+health_failed() { echo "Health check failed at $URL"; }
+stop_docker() {
+  if [ "${started_docker:-0}" -eq 1 ]; then
+    run osascript -e 'tell application "OrbStack" to quit'
+    started_docker=0
+  fi
+}
+
+update() {
+  no_docker=0
+  case "${2:-}" in
+    --no-docker|"") ;;
+    *) echo "Usage: $0 update [--no-docker]"; exit 2 ;;
+  esac
+  if [ -n "${3:-}" ]; then echo "Usage: $0 update [--no-docker]"; exit 2; fi
+  if [ "${2:-}" = "--no-docker" ]; then
+    no_docker=1
+    echo "Warning: skipping Docker test and Linux build"
+  fi
+
+  started_docker=0
+  if [ "$no_docker" -eq 0 ]; then
+    if ! docker info >/dev/null 2>&1; then
+      echo "Docker not running; starting OrbStack"
+      run open -a OrbStack
+      started_docker=1
+      if ! dry; then
+        n=0
+        while [ "$n" -lt 30 ] && ! docker info >/dev/null 2>&1; do n=$((n + 1)); sleep 1; done
+        if ! docker info >/dev/null 2>&1; then echo "Docker did not start; dashboard untouched"; stop_docker; exit 1; fi
+      fi
+    fi
+
+    dtest_cmd='touch src/*.rs; cargo test 2>&1 | tail -3; cargo build --release 2>&1 | tail -1'
+    if dry; then
+      printf "[dry-run] scripts/dtest.sh sh -c '%s'\n" "$dtest_cmd"
+    else
+      out="$(scripts/dtest.sh sh -c "$dtest_cmd" 2>&1)" || {
+        echo "Docker test failed; dashboard untouched"; stop_docker; exit 1;
+      }
+      printf '%s\n' "$out"
+      case "$out" in
+        *error*|*FAILED*) echo "Docker test or build error; dashboard untouched"; stop_docker; exit 1 ;;
+      esac
+      echo "Docker test and Linux build passed"
+    fi
+  fi
+
+  if [ -f "$BIN" ]; then run cp "$BIN" "$PREV"; fi
+
+  note "cargo build --release (in $ROOT)"
+  if ! dry; then
+    (cd "$ROOT" && cargo build --release) || { echo "Mac build failed; dashboard untouched"; stop_docker; exit 1; }
+  fi
+
+  run "$0" restart
+
+  if dry; then
+    note "curl -fsS $URL/healthz and $URL/api/state (up to 20s)"
+    echo "updated"
+  elif health_wait; then
+    "$0" status
+    echo "updated"
+  else
+    health_failed
+    if [ -f "$PREV" ]; then run cp "$PREV" "$BIN"; fi
+    run "$0" restart
+    if ! dry; then tail -n 10 "$LOG" 2>/dev/null || true; fi
+    echo "rolled back"
+    stop_docker
+    exit 1
+  fi
+
+  stop_docker
+}
+
 case "${1:-status}" in
+  update)
+    update "$@"
+    ;;
+  _healthcheck)
+    if health_wait; then echo "health ok"; else health_failed; exit 1; fi
+    ;;
   build)
     cd "$ROOT" && cargo build --release
     ;;
@@ -116,6 +226,6 @@ case "${1:-status}" in
     tail -n 40 "$LOG"
     ;;
   *)
-    echo "Usage: $0 start | stop | restart | status | open | logs | build | login on|off|status"; exit 2
+    echo "Usage: $0 start | stop | restart | status | open | logs | build | update [--no-docker] | login on|off|status"; exit 2
     ;;
 esac
