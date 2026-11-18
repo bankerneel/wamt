@@ -2,9 +2,11 @@
 //! and Claude Code usage. Read-only on its sources; binds to 127.0.0.1.
 
 mod agg;
+mod backfill;
 mod codex;
 mod drill;
 mod feed;
+mod history;
 mod http;
 mod hub;
 mod payload;
@@ -19,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -435,7 +437,9 @@ fn merge_codex_day(into: &mut DayAgg, cx: &DayAgg) {
 
 fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hub: Arc<Hub>) {
     let cache_path = state_dir.join("transcripts.json");
+    let history_path = state_dir.join("history.json");
     let off = shared.lock().unwrap().off;
+    let mut history = history::History::load(&history_path);
     let mut t = tail::Tailer::new(root.clone(), off);
     if let Some(c) = state::load::<tail::TailCache>(&cache_path) {
         if t.restore(c) {
@@ -460,6 +464,9 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
     let mut last_tracked = 0i64;
     let mut days_arc: Arc<Vec<(i32, DayAgg)>> = Arc::new(Vec::new());
     let mut week_part = payload::WeekPart::default();
+    let mut month_part: Vec<payload::MonthDayOut> = Vec::new();
+    let mut backfill_rx: Option<mpsc::Receiver<backfill::BackfillResult>> = None;
+    let mut rebuild = false;
     let mut first = true;
     loop {
         let now = now_ms();
@@ -474,6 +481,20 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
                 log("new day: rolling the seven-day window (days 4 to 7 keep totals only)");
                 force = true;
                 today = day;
+            }
+            // A day leaving the window becomes a totals-only month entry.
+            // Do this before prune drops it. The file is written only when
+            // something actually moved, which happens once a day at most.
+            let cxd: HashMap<i32, u64> = cx
+                .as_ref()
+                .map(|c| c.agg.days.iter().map(|(d, a)| (*d, a.total().t.total())).collect())
+                .unwrap_or_default();
+            if history.capture_expired(&t.agg.days, day - (WEEK_DAYS - 1), day, &cxd) {
+                match state::save(&history_path, &history) {
+                    Ok(n) => log(format!("history: kept {} days in {n} bytes", history.days.len())),
+                    Err(e) => log(format!("history save failed: {e}")),
+                }
+                rebuild = true;
             }
             t.agg.prune(day - (WEEK_DAYS - 1), now, off);
             t.prune_sessions(detail_start);
@@ -527,17 +548,64 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
                 t.stats.files,
                 t.stats.bytes_read / 1_000_000
             ));
+            // Fill older days on a separate low-priority thread. The live
+            // tailer keeps reading, publishing and saving while this runs.
+            let have: HashSet<i32> = history.days.iter().map(|d| d.day).collect();
+            if !backfill::missing_days(day, &have).is_empty() {
+                let (bx, cr) = (root.clone(), codex_root.clone());
+                let (tx, rx) = mpsc::channel();
+                thread::Builder::new().name("backfill".into()).stack_size(1 << 20).spawn(move || {
+                    backfill::set_low_priority();
+                    let r = backfill::backfill(&bx, cr.is_dir().then_some(cr.as_path()), off, day, &have);
+                    log(format!(
+                        "history backfill: {} days, {} ms, {} MB read",
+                        r.days.len(),
+                        r.ms,
+                        r.bytes / 1_000_000
+                    ));
+                    let released = sys::release_free_memory();
+                    if released > 0 {
+                        log(format!("backfill returned {} MB to macOS", released / 1_048_576));
+                    }
+                    let _ = tx.send(r);
+                })
+                .unwrap();
+                backfill_rx = Some(rx);
+            }
         }
-        if changed || force || now - last_pub >= 5000 {
+        // Pick up a finished backfill without waiting for it: try_recv never
+        // blocks the live data.
+        if let Some(rx) = &backfill_rx {
+            if let Ok(r) = rx.try_recv() {
+                let mut added = 0;
+                for d in r.days {
+                    if history.upsert(d) {
+                        added += 1;
+                    }
+                }
+                if added > 0 {
+                    history.trim(day);
+                    match state::save(&history_path, &history) {
+                        Ok(n) => log(format!("history: backfilled {added} days, {} days kept in {n} bytes", history.days.len())),
+                        Err(e) => log(format!("history save failed: {e}")),
+                    }
+                    rebuild = true;
+                }
+                backfill_rx = None;
+            }
+        }
+        if changed || force || rebuild || now - last_pub >= 5000 {
             last_pub = now;
             let anchors = shared.lock().unwrap().anchors();
             let window = t.agg.window(now, &anchors);
-            if changed || force {
+            let fresh = changed || force || rebuild;
+            if fresh {
                 let cxd: HashMap<i32, u64> = cx
                     .as_ref()
                     .map(|c| c.agg.days.iter().map(|(d, a)| (*d, a.total().t.total())).collect())
                     .unwrap_or_default();
                 week_part = build_week(&t.agg.week(day), &cxd, &t.agg.week_hits, off);
+                month_part = payload::build_month(&history, &week_part, day);
                 let mut v: Vec<(i32, DayAgg)> = Vec::with_capacity(3);
                 for d in [day, day - 1, day - 2] {
                     let mut a = t.agg.days.get(&d).cloned();
@@ -580,6 +648,7 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
                 let mut sh = shared.lock().unwrap();
                 sh.tx.days = days_arc.clone();
                 sh.tx.week = week_part.clone();
+                sh.tx.month = month_part.clone();
                 sh.tx.sessions = Arc::new(sessions);
                 sh.tx.window = Some(window);
                 sh.tx.spark_start = start;
@@ -610,8 +679,9 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
             }
             hub.push_feed(feed_items.into_iter().map(|it| (it.id.clone(), serde_json::to_string(&it).unwrap_or_default())).collect());
             publish_live(&shared, &hub);
-            if changed || force {
+            if fresh {
                 publish_days(&shared, &hub, force);
+                rebuild = false;
             }
         }
         flush_days(&shared, &hub);

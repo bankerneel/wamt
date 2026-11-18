@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::agg::{ColdUse, DayAgg, Use, WeekDay, WindowEst};
+use crate::history::{History, MONTH_DAYS};
 use crate::sys::{memory_bytes, Sys};
 use crate::t3::{ActiveRun, Ctx, Pr, RunRow, Subagent, ThreadMeta, Waiting};
 use crate::tail::{SessionInfo, TailStats};
@@ -34,6 +35,8 @@ pub struct TxPart {
     pub days: Arc<Vec<(i32, DayAgg)>>,
     /// The 7-day strip: daily totals only.
     pub week: WeekPart,
+    /// The 30-day strip: history days plus the seven kept days.
+    pub month: Vec<MonthDayOut>,
     pub sessions: Arc<HashMap<String, SessionInfo>>,
     pub window: Option<WindowEst>,
     pub spark_start: i64,
@@ -78,6 +81,59 @@ pub struct WeekInfo {
 pub struct WeekPart {
     pub days: Vec<WeekDayOut>,
     pub info: WeekInfo,
+}
+
+/// One day of the month strip: the same totals-only fields the history file
+/// keeps, with the day as a label the page can read directly.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct MonthDayOut {
+    pub day: String,
+    /// input, output, cache read, cache write 5m, cache write 1h.
+    pub t: [u64; 5],
+    pub n: u64,
+    pub w: f64,
+    /// Weighted units per model family: opus, sonnet, haiku, other.
+    pub fam: [f64; 4],
+    pub codex_tokens: u64,
+    pub active_min: u32,
+}
+
+/// History days plus the seven kept days, oldest first, at most a month.
+/// The seven-day part is built from the same summaries as `week`, so the
+/// month and the strip always agree on today's numbers.
+pub fn build_month(history: &History, week: &WeekPart, today: i32) -> Vec<MonthDayOut> {
+    let mut out: Vec<MonthDayOut> = history
+        .days
+        .iter()
+        .filter(|d| d.day < today - (crate::agg::WEEK_DAYS - 1))
+        .map(|d| MonthDayOut {
+            day: day_label(d.day),
+            t: d.t,
+            n: d.n,
+            w: round2(d.w),
+            fam: d.fam.map(round2),
+            codex_tokens: d.codex_tokens,
+            active_min: d.active_min,
+        })
+        .collect();
+    for d in &week.days {
+        out.push(MonthDayOut {
+            day: d.day.clone(),
+            t: [d.total.t.input, d.total.t.output, d.total.t.cache_read, d.total.t.cache_w5m, d.total.t.cache_w1h],
+            n: d.total.n,
+            w: round2(d.total.w),
+            fam: d.fam,
+            codex_tokens: d.codex_tokens,
+            active_min: d.active_min,
+        });
+    }
+    out.sort_by(|a, b| a.day.cmp(&b.day));
+    out.dedup_by(|a, b| a.day == b.day);
+    if out.len() > MONTH_DAYS as usize {
+        let extra = out.len() - MONTH_DAYS as usize;
+        out.drain(..extra);
+    }
+    out
 }
 
 fn round2(x: f64) -> f64 {
@@ -738,6 +794,8 @@ struct Days<'a> {
     days: Vec<DayOut<'a>>,
     week: &'a [WeekDayOut],
     week_info: &'a WeekInfo,
+    /// Oldest first: history days plus the seven kept days, at most 30.
+    month: &'a [MonthDayOut],
     /// USD per million tokens (input, output, cache read) for each priced
     /// model in these days; the bill's API-equivalent view explains itself
     /// with these. Unpriced (Codex) models are left out.
@@ -1182,7 +1240,7 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
             }
         }
     }
-    serde_json::to_string(&Days { now, days, week: &sh.tx.week.days, week_info: &sh.tx.week.info, prices }).unwrap_or_else(|_| "{}".into())
+    serde_json::to_string(&Days { now, days, week: &sh.tx.week.days, week_info: &sh.tx.week.info, month: &sh.tx.month, prices }).unwrap_or_else(|_| "{}".into())
 }
 
 #[cfg(test)]
@@ -1265,6 +1323,38 @@ mod tests {
         let v: serde_json::Value = serde_json::to_value(&w.info).unwrap();
         assert!(v.get("hits").is_some());
         assert!(v.get("cap").is_none() && v.get("cap_hit").is_none());
+    }
+
+    #[test]
+    fn month_has_history_plus_kept_days_capped_at_thirty() {
+        use crate::history::{HistDay, History, HISTORY_VERSION, MONTH_DAYS};
+        let mut a = Agg::default();
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        add(&mut a, day_start_ms(today, OFF) + MS_PER_HOUR, "claude-opus-5-5", 10, "t");
+        let week = build_week(&a.week(today), &HashMap::new(), &[], OFF);
+        let mut h = History { v: HISTORY_VERSION, days: Vec::new() };
+        for back in 8..=32 {
+            h.upsert(HistDay {
+                day: today - back,
+                n: back as u64,
+                t: [1, 2, 3, 4, 5],
+                w: 7.0,
+                fam: [1.0, 0.0, 0.0, 0.0],
+                codex_tokens: 3,
+                active_min: 5,
+            });
+        }
+        let m = build_month(&h, &week, today);
+        assert_eq!(m.len(), MONTH_DAYS as usize);
+        assert_eq!(m[0].day, day_label(today - 30));
+        assert_eq!(m[m.len() - 1].day, day_label(today));
+        assert_eq!(m[m.len() - 1].t[1], 10);
+        assert_eq!(m[0].codex_tokens, 3);
+        let v: serde_json::Value = serde_json::to_value(&m[0]).unwrap();
+        for k in ["day", "t", "n", "w", "fam", "codex_tokens", "active_min"] {
+            assert!(v.get(k).is_some(), "{k}");
+        }
     }
 
     // ---------------------------------------------------------------- tips

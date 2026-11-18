@@ -291,6 +291,21 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .wcal input[type="datetime-local"] { width: 180px; max-width: 100%; }
 .wcal .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 @media (max-width: 760px) { .weekbox { padding: 10px 10px 8px; } .weekcols { gap: 4px; } .wcol .wnum { font-size: 11px; } .wcol .wcx { font-size: 9.5px; } .weekbox .hero .big { font-size: 36px; } .wcal input[type="datetime-local"] { width: 156px; } }
+.monthbox { border: 2px solid var(--border); border-radius: 2px; padding: 10px 12px 8px; margin: 0 0 20px; background: var(--panel); }
+.monthhead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }
+.monthhead h3 { margin: 0; }
+.monthtot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 12px; color: var(--ink-soft); }
+.monthtot .big { font-size: 22px; line-height: 1; color: var(--ink); }
+.monthcols { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 2px; margin-top: 9px; }
+.mcol { min-width: 0; text-align: center; }
+.mcol .mbars { height: 40px; display: flex; flex-direction: column-reverse; justify-content: flex-start; border-bottom: 2px solid var(--border); }
+.mcol .mbars i { display: block; width: 100%; border-top: 1px solid var(--panel); min-height: 1px; }
+.mcol .mlab { height: 12px; margin-top: 3px; font-size: 9px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.mcol.today .mbars { border-bottom-color: var(--accent-ink); }
+.mcol.today .mlab { color: var(--accent-ink); font-weight: 800; }
+.mcol.zero .mbars { border-bottom-color: var(--rule); }
+.monthbox .fine { margin-top: 8px; font-size: 11px; color: var(--muted); }
+@media (max-width: 760px) { .monthbox { padding: 8px 8px 6px; } .monthcols { gap: 1px; } .mcol .mbars { height: 32px; } .mcol .mlab { font-size: 8px; } }
 .dcols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; margin-top: 6px; }
 .daynone { font-family: "Caveat", cursive; font-size: 21px; color: var(--muted); margin: 4px 0; }
 .cmp { font-size: 12px; color: var(--ink-soft); }
@@ -1382,11 +1397,32 @@ function weekInner(D) {
   } else {
     meterHtml = `<p class="fine">Set the weekly % from /usage to see a weekly meter.</p>`;
   }
-  return `<div class="weekhead"><h3>the week so far</h3><button class="iconbtn" type="button" data-csv title="Daily totals for the last 7 days, as a CSV file">Download CSV</button><div class="weektot"><span class="big num">${compact(totW)}</span><span>weighted units, last 7 days</span>${plate >= 0.05 ? `<span data-tip="Weighted 7-day total divided by what the last 5-hour limit hit used">about ${plate.toFixed(1)} full 5-hour plates</span>` : ""}${info.codex_tokens ? `<span>GPT ${compact(info.codex_tokens)} tokens</span>` : ""}</div></div>
+  return `<div class="weekhead"><h3>the week so far</h3><button class="iconbtn" type="button" data-csv title="Daily totals for up to the last 30 days, as a CSV file">Download CSV</button><div class="weektot"><span class="big num">${compact(totW)}</span><span>weighted units, last 7 days</span>${plate >= 0.05 ? `<span data-tip="Weighted 7-day total divided by what the last 5-hour limit hit used">about ${plate.toFixed(1)} full 5-hour plates</span>` : ""}${info.codex_tokens ? `<span>GPT ${compact(info.codex_tokens)} tokens</span>` : ""}</div></div>
     <div class="weekcols">${cols}</div>${meterHtml}<div class="wcal" id="weekCalib">${weekCalibHtml(st)}</div>`;
 }
 function weekHtml(D) { const inner = weekInner(D); return inner ? `<div class="weekbox" id="weekBox">${inner}</div>` : ""; }
 function renderWeekBox() { const el = $("weekBox"); if (el && S.days) el.innerHTML = weekInner(S.days); bindWeekCalib(); }
+
+// The month: one thin column per day, stacked by model family. History days
+// hold totals only; the newest seven share their numbers with the week strip.
+const usd = (w) => "$" + (Number(w) / 1e6).toFixed(2);
+function monthHtml(D) {
+  const M = D.month || []; if (!M.length) return "";
+  const maxW = Math.max(1e-9, ...M.map((m) => m.w));
+  const totW = M.reduce((a, m) => a + (Number(m.w) || 0), 0);
+  const cols = M.map((m, i) => {
+    const p = dayParts(m.day);
+    const today = i === M.length - 1;
+    const t = m.t || [0, 0, 0, 0, 0];
+    const segs = (m.fam || []).map((v, f) => (v > 0 ? `<i style="height:${((v / maxW) * 40).toFixed(1)}px;background:var(--m${f})"></i>` : "")).join("");
+    const tip = `<b>${p.wd} ${esc(p.short)}</b><br><b>${esc(compact(t[1]))}</b> output tokens<br>${esc(full(m.n))} requests<br>API-equivalent ${esc(usd(m.w))}`;
+    const aria = `${p.wd} ${p.short}: ${compact(t[1])} output tokens, ${full(m.n)} requests, API-equivalent ${usd(m.w)}`;
+    const label = i % 5 === 0 ? esc(p.short.split(" ")[1] || "") : "";
+    return `<div class="mcol${today ? " today" : ""}${m.w > 0 ? "" : " zero"}" data-tip="${esc(tip)}" role="img" aria-label="${esc(aria)}"><div class="mbars">${segs}</div><div class="mlab">${label}</div></div>`;
+  }).join("");
+  return `<div class="monthbox" id="monthBox"><div class="monthhead"><h3>the last 30 days</h3><div class="monthtot"><span class="big num">${esc(compact(totW))}</span><span>weighted units</span><span class="num" data-tip="Weighted usage divided by 1,000,000, an API-equivalent estimate">${esc(usd(totW))}</span></div></div>
+    <div class="monthcols">${cols}</div><p class="fine">Daily totals only: no sessions, hours or per-thread detail. API-equivalent dollars are w / 1,000,000, an estimate; your plan is not billed this way.</p></div>`;
+}
 
 function renderDays(force) {
   const D = S.days; if (!D || !D.days) return;
@@ -1399,7 +1435,7 @@ function renderDays(force) {
   const allFams = [0, 1, 2, 3, 4].filter((f) => days.some((d) => famsOf(d)[f] > 0));
   $("daysLegend").innerHTML = allFams.map((f) => `<span>${sw(f)}${FAM[f]}</span>`).join("");
 
-  let h = weekHtml(D);
+  let h = weekHtml(D) + monthHtml(D);
   days.forEach((d, i) => {
     const p = dayParts(d.day);
     const out = d.total.t[1];
@@ -1612,19 +1648,22 @@ function standupText(i) {
   L.push(`Output: ${compact(t.t[1] || 0)} tokens over ${full(t.n)} requests`);
   return L.join("\n");
 }
-// The week as CSV: daily totals only, the same numbers the strip shows.
+// Every day available as CSV: the month when present, otherwise the week.
+// Same totals-only numbers the 30-day strip shows.
 function weekCsv() {
-  const wk = (S.days && S.days.week) || [];
+  const D = S.days || {};
+  const days = (D.month && D.month.length ? D.month : D.week) || [];
   const head = ["day", "requests", "input", "output", "cache_read", "cache_write_5m", "cache_write_1h", "weighted_units", "api_usd_estimate", "opus_weight", "sonnet_weight", "haiku_weight", "other_weight", "codex_tokens", "active_minutes"];
-  const rows = wk.map((d) => { const t = d.total.t, f = d.fam || [0, 0, 0, 0]; return [d.day, d.total.n, t[0], t[1], t[2], t[3], t[4], Math.round(d.total.w), (d.total.w / 1e6).toFixed(2), ...f.slice(0, 4).map((x) => Math.round(x)), d.codex_tokens || 0, d.active_min || 0].join(","); });
+  const rows = days.map((d) => { const t = d.t || [0, 0, 0, 0, 0], f = d.fam || [0, 0, 0, 0]; return [d.day, d.n || 0, t[0], t[1], t[2], t[3], t[4], Math.round(d.w || 0), ((d.w || 0) / 1e6).toFixed(2), ...f.slice(0, 4).map((x) => Math.round(x)), d.codex_tokens || 0, d.active_min || 0].join(","); });
   return [head.join(","), ...rows].join("\n") + "\n";
 }
 document.addEventListener("click", (e) => {
   const b = e.target.closest && e.target.closest("[data-csv]"); if (!b) return;
-  const wk = (S.days && S.days.week) || []; if (!wk.length) return;
+  const D = S.days || {};
+  const days = (D.month && D.month.length ? D.month : D.week) || []; if (!days.length) return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([weekCsv()], { type: "text/csv" }));
-  a.download = `who-ate-my-tokens-week-${wk[wk.length - 1].day}.csv`;
+  a.download = `who-ate-my-tokens-days-${days[days.length - 1].day}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 });
