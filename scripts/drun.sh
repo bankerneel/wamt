@@ -6,10 +6,12 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p .state-docker
-docker rm -f sb-test >/dev/null 2>&1 || true
+# SB_NAME, SB_PORT and SB_TARGET let parallel checkouts test side by side.
+NAME="${SB_NAME:-sb-test}"; PORT="${SB_PORT:-7318}"; TARGET="${SB_TARGET:-sb-target}"
+docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker network inspect sb-net >/dev/null 2>&1 || docker network create sb-net >/dev/null
-exec docker run -d --name sb-test --network sb-net --memory 256m --cpus 1 \
-  -p 127.0.0.1:7318:7317 \
+exec docker run -d --name "$NAME" --network sb-net --memory 256m --cpus 1 \
+  -p "127.0.0.1:$PORT:7317" \
   -v "$HOME/.t3/userdata":/data/t3:ro \
   --mount type=tmpfs,destination=/data/t3/secrets,tmpfs-size=1k \
   --mount type=tmpfs,destination=/data/t3/clerk,tmpfs-size=1k \
@@ -19,7 +21,7 @@ exec docker run -d --name sb-test --network sb-net --memory 256m --cpus 1 \
   -v "$HOME/.claude/projects":/data/claude:ro \
   -v "${WAMT_CODEX_SRC:-$HOME/.codex/sessions}":/data/codex/sessions:ro \
   -v "$HOME/.codex/archived_sessions":/data/codex/archived_sessions:ro \
-  -v sb-target:/target:ro \
+  -v "$TARGET":/target:ro \
   -v "$PWD/.state-docker":/state \
   -v "$PWD/ui":/ui:ro \
   -e WAMT_BIND=0.0.0.0:7317 \
@@ -29,5 +31,5 @@ exec docker run -d --name sb-test --network sb-net --memory 256m --cpus 1 \
   -e WAMT_STATE=/state \
   -e WAMT_UTC_OFFSET_MIN=330 \
   -e WAMT_UI=/ui/index.html \
-  -e WAMT_ALLOW_HOSTS=localhost:7318,127.0.0.1:7318,sb-test:7317 \
+  -e WAMT_ALLOW_HOSTS="localhost:$PORT,127.0.0.1:$PORT,$NAME:7317" \
   rust:1-slim-bookworm /target/release/wamt
