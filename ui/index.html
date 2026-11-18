@@ -1408,7 +1408,16 @@ function renderWeekBox() { const el = $("weekBox"); if (el && S.days) el.innerHT
 // hold totals only; the newest seven share their numbers with the week strip.
 const usd = (w) => "$" + (Number(w) / 1e6).toFixed(2);
 function monthHtml(D) {
-  const M = D.month || []; if (!M.length) return "";
+  const have = D.month || []; if (!have.length) return "";
+  // Days with no activity are absent from the payload; draw them as empty
+  // columns so the strip always spans 30 days at even spacing.
+  const byDay = new Map(have.map((m) => [m.day, m]));
+  const [ly, lm, ld] = have[have.length - 1].day.split("-").map(Number);
+  const last = Date.UTC(ly, lm - 1, ld), M = [];
+  for (let k = 29; k >= 0; k--) {
+    const day = new Date(last - k * 86400e3).toISOString().slice(0, 10);
+    M.push(byDay.get(day) || { day, t: [0, 0, 0, 0, 0], n: 0, w: 0, fam: [0, 0, 0, 0], codex_tokens: 0, active_min: 0 });
+  }
   const maxW = Math.max(1e-9, ...M.map((m) => m.w));
   const totW = M.reduce((a, m) => a + (Number(m.w) || 0), 0);
   const cols = M.map((m, i) => {
