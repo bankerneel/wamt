@@ -47,6 +47,11 @@ changes the cache format reads the last 7 days once (about 6 s).
   "Download CSV" saves the week's daily totals.
 - **The bill**: tokens by model and by thread; "API prices" shows what they
   would cost at API list prices (an estimate; the plan is not billed this way).
+- **Diet tips**: a Today and Yesterday tab of where tokens could be saved,
+  computed from the day's aggregates: heavy contexts to start fresh, peak
+  session concurrency, marathon sessions, Opus subagents, spoiled cache and
+  the note-taker's share. Each tip names the threads and their share and
+  API-equivalent cost. No message content is read.
 - **Alerts without looking**: the tab title and favicon show the plate and
   anything waiting on you. "Notify me" turns on desktop notifications for: a
   thread waiting on you, its prompt cache about to go cold, a thread passing

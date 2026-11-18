@@ -87,6 +87,33 @@ fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
 
+/// Short display forms for the tip lines: "612K", "1.2M".
+fn big_num(n: f64) -> String {
+    let n = n.max(0.0);
+    let (v, unit) = if n >= 1e6 { (n / 1e6, "M") } else if n >= 1e3 { (n / 1e3, "K") } else { (n, "") };
+    let s = if v >= 10.0 || unit.is_empty() { (v.round() as u64).to_string() } else { format!("{v:.1}") };
+    s + unit
+}
+/// Weights are list-price micro-dollars, so dollars are weight / 1e6.
+fn usd_s(w: f64) -> String {
+    format!("${:.2}", w / 1e6)
+}
+fn pct_s(share: f64) -> String {
+    format!("{}%", (share * 100.0).round() as i64)
+}
+/// Names on a muted line, folded so eight copies of one observer read "x8".
+fn join_names(names: &[String]) -> String {
+    let mut counts: Vec<(&String, usize)> = Vec::new();
+    for n in names {
+        if let Some(e) = counts.iter_mut().find(|(k, _)| *k == n) {
+            e.1 += 1;
+        } else {
+            counts.push((n, 1));
+        }
+    }
+    counts.into_iter().map(|(n, c)| if c > 1 { format!("{n} x{c}") } else { n.clone() }).collect::<Vec<_>>().join(", ")
+}
+
 /// Builds the 7-day payload from compact day summaries (oldest first).
 /// `codex` maps a local day to Codex tokens that day.
 pub fn build_week(claude: &[WeekDay], codex: &HashMap<i32, u64>, hits: &[i64], cap: Option<&CapRef>, off: i32) -> WeekPart {
@@ -666,6 +693,23 @@ struct T3Day<'a> {
     created: usize,
 }
 
+/// One line of live advice for a day, ordered by the weight it accounts for.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct TipOut {
+    pub kind: &'static str,
+    pub label: &'static str,
+    /// The one-line message, including the share and the dollar estimate.
+    pub text: String,
+    /// Muted second line naming the threads or sessions involved.
+    pub who: String,
+    /// Weighted units this tip is about; tips are ordered by this.
+    pub w: f64,
+    pub share: f64,
+    pub usd: f64,
+    /// Rule explained in plain text plus <b> and <br> only.
+    pub tip: &'static str,
+}
+
 #[derive(Serialize)]
 struct DayOut<'a> {
     day: String,
@@ -687,6 +731,8 @@ struct DayOut<'a> {
     by_now: f64,
     /// Spoiled leftovers: cache rebuilt after the cache expired.
     cold: ColdUse,
+    /// Where this day could be trimmed, most costly first, at most five.
+    tips: Vec<TipOut>,
 }
 
 #[derive(Serialize)]
@@ -714,6 +760,207 @@ fn app_key(a: App) -> &'static str {
     }
 }
 
+/// Builds the per-day "diet tips" from aggregates already held in memory.
+/// No new storage and no re-reading of transcripts. `sources` is the day's
+/// displayed source list, `apps` the full per-app totals (not truncated), and
+/// `labels` maps a session id to a readable thread or session name.
+fn compose_tips(
+    agg: &DayAgg,
+    sources: &[SourceOut],
+    apps: &BTreeMap<&'static str, Use>,
+    labels: &HashMap<String, String>,
+    day_w: f64,
+    is_today: bool,
+    // claude-mem note-taker sessions: tiny, many and short-lived, so they
+    // must not count as "too many at once" or as marathons.
+    is_obs: &dyn Fn(&str) -> bool,
+) -> Vec<TipOut> {
+    let share = |w: f64| if day_w > 0.0 { w / day_w } else { 0.0 };
+    let name = |sid: &str| labels.get(sid).cloned().unwrap_or_else(|| sid.chars().take(8).collect());
+    let mut out: Vec<TipOut> = Vec::new();
+
+    // 1. Heavy context: input and cache are resent on every request.
+    let mut heavy: Vec<(f64, f64, String)> = Vec::new();
+    for s in sources {
+        if s.total.n == 0 {
+            continue;
+        }
+        let ctx = s.total.t.input + s.total.t.cache_read + s.total.t.cache_w5m + s.total.t.cache_w1h;
+        let avg = ctx as f64 / s.total.n as f64;
+        if avg > 300_000.0 {
+            heavy.push((s.total.w, avg, s.label.clone()));
+        }
+    }
+    heavy.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    heavy.truncate(3);
+    if !heavy.is_empty() {
+        let w: f64 = heavy.iter().map(|h| h.0).sum();
+        let avg = heavy.iter().map(|h| h.1).sum::<f64>() / heavy.len() as f64;
+        out.push(TipOut {
+            kind: "context",
+            label: "Heavy context",
+            text: format!("start fresh when you switch tasks: {} context tokens per request on average, {} of the day, about {}", big_num(avg), pct_s(share(w)), usd_s(w)),
+            who: heavy.iter().map(|h| format!("{}: {} per request", h.2, big_num(h.1))).collect::<Vec<_>>().join(", "),
+            w,
+            share: share(w),
+            usd: w / 1e6,
+            tip: "<b>Start fresh when you switch tasks.</b><br>These sources averaged over 300K input and cache tokens per request. A long context is resent on every call, so a fresh thread or a compaction makes every later request cheaper. The biggest lever here.",
+        });
+    }
+
+    // 2. Too many at once: sessions with a request in the same 10-minute slot.
+    // Buckets exist for today only.
+    if is_today {
+        let mut slots: BTreeMap<u16, Vec<String>> = BTreeMap::new();
+        let mut slot_w: HashMap<u16, f64> = HashMap::new();
+        for (sid, s) in agg.sessions.iter().filter(|(sid, _)| !is_obs(sid)) {
+            let w: f64 = s.models.values().map(|u| u.w).sum();
+            for slot in s.buckets.keys() {
+                slots.entry(*slot).or_default().push(sid.clone());
+                *slot_w.entry(*slot).or_default() += w;
+            }
+        }
+        if let Some((&slot, sids)) = slots.iter().max_by(|a, b| a.1.len().cmp(&b.1.len()).then(b.0.cmp(a.0))) {
+            if sids.len() >= 6 {
+                let w = slot_w.get(&slot).copied().unwrap_or(0.0);
+                let min = slot as i64 * 10;
+                out.push(TipOut {
+                    kind: "concurrency",
+                    label: "Too many at once",
+                    text: format!("{} sessions were active at once at {:02}:{:02}; together they ate {} of the day, about {}", sids.len(), min / 60, min % 60, pct_s(share(w)), usd_s(w)),
+                    who: join_names(&sids.iter().map(|s| name(s)).collect::<Vec<_>>()),
+                    w,
+                    share: share(w),
+                    usd: w / 1e6,
+                    tip: "<b>Run fewer sessions at once.</b><br>This is the most sessions with a request in the same 10-minute slot today. Parallel sessions each carry their own context, so overlapping them multiplies what gets resent.",
+                });
+            }
+        }
+    }
+
+    // 3. Marathon sessions: eight distinct hours today, or an eight-hour span
+    // on older days whose 10-minute buckets have been dropped.
+    let mut marathon: Vec<(f64, String, String)> = Vec::new();
+    for (sid, s) in agg.sessions.iter().filter(|(sid, _)| !is_obs(sid)) {
+        let w: f64 = s.models.values().map(|u| u.w).sum();
+        if w <= 0.0 {
+            continue;
+        }
+        if is_today {
+            let hours: std::collections::BTreeSet<u16> = s.buckets.keys().map(|slot| slot / 6).collect();
+            if hours.len() >= 8 {
+                marathon.push((w, name(sid), format!("in {} hours", hours.len())));
+            }
+        } else if s.last > s.first && (s.last - s.first) >= 8 * MS_PER_HOUR as i64 {
+            let h = (s.last - s.first) / MS_PER_HOUR as i64;
+            marathon.push((w, name(sid), format!("spanning {h} hours")));
+        }
+    }
+    if !marathon.is_empty() {
+        let w: f64 = marathon.iter().map(|m| m.0).sum();
+        let pre = if is_today { "in" } else { "spanning" };
+        out.push(TipOut {
+            kind: "marathon",
+            label: "Marathon sessions",
+            text: format!("{} sessions with requests {} 8 or more hours, {} of the day, about {}", marathon.len(), pre, pct_s(share(w)), usd_s(w)),
+            who: marathon.iter().map(|m| format!("{} {}", m.1, m.2)).collect::<Vec<_>>().join(", "),
+            w,
+            share: share(w),
+            usd: w / 1e6,
+            tip: "<b>Review sessions active over many hours.</b><br>A session that keeps working across the day resends its growing context each time. Starting a fresh thread at a task change keeps contexts short.",
+        });
+    }
+
+    // 4. Opus subagents. `SessionDay.sub` is a total across models, so the
+    // subagent share of each session's weight is applied to its Opus models
+    // to estimate the Opus subagent tokens and their weight.
+    let mut opus_sub_w = 0.0;
+    let mut opus_sub_t = crate::transcript::Tokens::default();
+    let mut opus_who: Vec<String> = Vec::new();
+    for (sid, s) in &agg.sessions {
+        let sw: f64 = s.models.values().map(|u| u.w).sum();
+        if sw <= 0.0 || s.sub.w <= 0.0 {
+            continue;
+        }
+        let frac = (s.sub.w / sw).min(1.0);
+        let mut hit = false;
+        for (m, u) in &s.models {
+            if crate::transcript::family(m) != 0 {
+                continue;
+            }
+            hit = true;
+            opus_sub_w += u.w * frac;
+            let t = &u.t;
+            opus_sub_t.input += (t.input as f64 * frac).round() as u64;
+            opus_sub_t.output += (t.output as f64 * frac).round() as u64;
+            opus_sub_t.cache_read += (t.cache_read as f64 * frac).round() as u64;
+            opus_sub_t.cache_w5m += (t.cache_w5m as f64 * frac).round() as u64;
+            opus_sub_t.cache_w1h += (t.cache_w1h as f64 * frac).round() as u64;
+        }
+        if hit {
+            opus_who.push(name(sid));
+        }
+    }
+    if day_w > 0.0 && opus_sub_w / day_w > 0.05 {
+        let sonnet_w = crate::transcript::weight("claude-sonnet-5-5", &opus_sub_t, false);
+        let save = (opus_sub_w - sonnet_w).max(0.0);
+        out.push(TipOut {
+            kind: "opus",
+            label: "Opus subagents",
+            text: format!("subagents used Opus for {} of the day, about {} less on Sonnet", pct_s(share(opus_sub_w)), usd_s(save)),
+            who: opus_who.join(", "),
+            w: opus_sub_w,
+            share: share(opus_sub_w),
+            usd: opus_sub_w / 1e6,
+            tip: "<b>Check which models your subagents use.</b><br>This is the weight of subagent requests on Opus models, and what the same tokens would have cost at Sonnet list prices. Explore and review agents rarely need Opus.",
+        });
+    }
+
+    // 5. Spoiled leftovers: cache rebuilt after it had expired.
+    let mut cold: Vec<(f64, u32, u64, String)> = Vec::new();
+    for s in sources {
+        if s.cold.n > 0 && s.cold.w > 0.0 {
+            cold.push((s.cold.w, s.cold.n, s.cold.tok, s.label.clone()));
+        }
+    }
+    cold.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    cold.truncate(2);
+    if !cold.is_empty() {
+        let w: f64 = cold.iter().map(|c| c.0).sum();
+        let n: u32 = cold.iter().map(|c| c.1).sum();
+        let tok: u64 = cold.iter().map(|c| c.2).sum();
+        out.push(TipOut {
+            kind: "cold",
+            label: "Spoiled leftovers",
+            text: format!("{} cold restart{} rebuilt {} tokens, {} of the day, about {}", n, if n == 1 { "" } else { "s" }, big_num(tok as f64), pct_s(share(w)), usd_s(w)),
+            who: cold.iter().map(|c| format!("{}: {} rebuild{}", c.3, c.1, if c.1 == 1 { "" } else { "s" })).collect::<Vec<_>>().join(", "),
+            w,
+            share: share(w),
+            usd: w / 1e6,
+            tip: "<b>Keep the prompt cache warm.</b><br>These requests rebuilt more than 50K tokens of cache after it had expired. Finishing a task before the cache goes cold, or resuming sooner, avoids paying twice.",
+        });
+    }
+
+    // 6. The note-taker's own share of the day.
+    let nw = apps.get("notetaker").map(|u| u.w).unwrap_or(0.0);
+    if day_w > 0.0 && nw / day_w > 0.03 {
+        out.push(TipOut {
+            kind: "notetaker",
+            label: "Note-taker",
+            text: format!("the claude-mem note-taker used {} of the day, about {}", pct_s(share(nw)), usd_s(nw)),
+            who: "claude-mem note-taker".into(),
+            w: nw,
+            share: share(nw),
+            usd: nw / 1e6,
+            tip: "<b>The note-taker counts against your plan too.</b><br>claude-mem's observer sessions run through the same login. Its share is shown here so you can decide whether to trim it.",
+        });
+    }
+
+    out.sort_by(|a, b| b.w.partial_cmp(&a.w).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(5);
+    out
+}
+
 pub fn compose_days(sh: &Shared, now: i64) -> String {
     let off = sh.off;
     let today = day_of(now, off);
@@ -730,6 +977,7 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
         let start = day_start_ms(day, off);
         let end = start + 24 * MS_PER_HOUR;
         let agg = sh.tx.days.iter().find(|(d, _)| *d == day).map(|(_, a)| a).unwrap_or(&blank);
+        let total = agg.total();
 
         // Sources: T3 sessions roll up per thread; the note-taker is one row.
         let mut src: HashMap<String, SourceOut> = HashMap::new();
@@ -784,6 +1032,18 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
             e.first = if e.first == 0 { s.first } else { e.first.min(s.first) };
             e.last = e.last.max(s.last);
         }
+        // Readable names for the sessions behind a tip: the T3 thread title
+        // when the session was matched, otherwise its title, folder or id.
+        let mut labels: HashMap<String, String> = HashMap::new();
+        for sid in agg.sessions.keys() {
+            let info = sh.tx.sessions.get(sid);
+            let label = match smap.get(sid) {
+                Some(th) => threads.get(th).map(|m| m.title.clone()).unwrap_or_else(|| session_label(sid, info)),
+                None => session_label(sid, info),
+            };
+            labels.insert(sid.clone(), label);
+        }
+
         let mut sources: Vec<SourceOut> = src.into_values().collect();
         sources.sort_by(|a, b| {
             b.total.w.partial_cmp(&a.total.w).unwrap_or(std::cmp::Ordering::Equal).then(b.total.t.output.cmp(&a.total.t.output))
@@ -893,12 +1153,14 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
             }
         }
 
+        let is_obs = |sid: &str| sh.tx.sessions.get(sid).is_some_and(|i| i.obs);
+        let tips = compose_tips(agg, &sources, &apps, &labels, total.w, back == 0, &is_obs);
         days.push(DayOut {
             day: day_label(day),
             start,
             offset: off,
             models: agg.models.clone(),
-            total: agg.total(),
+            total: total.clone(),
             hours: agg.hours.clone(),
             hours_n: agg.hours_n.clone(),
             active_min: agg.active_slots() * 5,
@@ -911,6 +1173,7 @@ pub fn compose_days(sh: &Shared, now: i64) -> String {
             resets,
             by_now,
             cold: cold_day,
+            tips,
         });
     }
     let mut prices = BTreeMap::new();
@@ -1009,5 +1272,159 @@ mod tests {
         assert!(a.hits.is_empty());
         let w = build_week(&a.week(today), &HashMap::new(), &a.week_hits, a.week_cap.as_ref(), OFF);
         assert!(w.info.cap.is_some() && w.info.hits.len() == 1);
+    }
+
+    // ---------------------------------------------------------------- tips
+    use crate::agg::{Bucket, SessionDay};
+
+    fn tip_source(label: &str, ctx: u64, n: u64, w: f64, cold: (u32, u64, f64)) -> SourceOut {
+        SourceOut {
+            key: label.into(),
+            app: App::T3,
+            label: label.into(),
+            thread: None,
+            up: None,
+            project: None,
+            total: Use { t: Tokens { input: ctx, ..Default::default() }, n, w },
+            sub: Use::default(),
+            cold: ColdUse { n: cold.0, tok: cold.1, w: cold.2 },
+            models: BTreeMap::new(),
+            first: 0,
+            last: 0,
+            sessions: 1,
+        }
+    }
+
+    #[test]
+    fn tips_heavy_context_lists_three_biggest_over_threshold() {
+        let sources = vec![
+            tip_source("A", 700_000 * 10, 10, 500.0, (0, 0, 0.0)),
+            tip_source("B", 500_000 * 10, 10, 400.0, (0, 0, 0.0)),
+            tip_source("C", 400_000 * 10, 10, 300.0, (0, 0, 0.0)),
+            tip_source("D", 350_000 * 10, 10, 200.0, (0, 0, 0.0)),
+            tip_source("E", 100_000 * 10, 10, 900.0, (0, 0, 0.0)),
+        ];
+        let tips = compose_tips(&DayAgg::default(), &sources, &BTreeMap::new(), &HashMap::new(), 1000.0, true, &|_| false);
+        assert_eq!(tips.len(), 1);
+        assert_eq!(tips[0].kind, "context");
+        assert!(tips[0].who.contains("A") && tips[0].who.contains("B") && tips[0].who.contains("C"));
+        assert!(!tips[0].who.contains("D") && !tips[0].who.contains("E"));
+        assert!((tips[0].w - 1200.0).abs() < 1e-9);
+        assert!(tips[0].text.contains("533K") && tips[0].text.contains("$"), "{}", tips[0].text);
+        assert!(tips[0].who.contains("700K per request"), "{}", tips[0].who);
+    }
+
+    #[test]
+    fn tips_concurrency_needs_six_sessions_in_one_slot() {
+        let mut d = DayAgg::default();
+        for i in 0..5 {
+            let mut s = SessionDay::default();
+            s.buckets.insert(3, Bucket { w: [1.0, 0.0, 0.0, 0.0], out: 0 });
+            d.sessions.insert(format!("s{i}"), s);
+        }
+        let tips = compose_tips(&d, &[], &BTreeMap::new(), &HashMap::new(), 100.0, true, &|_| false);
+        assert!(tips.iter().all(|t| t.kind != "concurrency"));
+        let mut s6 = SessionDay::default();
+        s6.buckets.insert(3, Bucket::default());
+        d.sessions.insert("s5".into(), s6);
+        let tips = compose_tips(&d, &[], &BTreeMap::new(), &HashMap::new(), 100.0, true, &|_| false);
+        let t = tips.iter().find(|t| t.kind == "concurrency").expect("six sessions in one slot");
+        assert!(t.text.contains("6 sessions") && t.text.contains("00:30"), "{}", t.text);
+        let tips = compose_tips(&d, &[], &BTreeMap::new(), &HashMap::new(), 100.0, false, &|_| false);
+        assert!(tips.iter().all(|t| t.kind != "concurrency"));
+        // Note-taker sessions do not count toward the six.
+        let tips = compose_tips(&d, &[], &BTreeMap::new(), &HashMap::new(), 100.0, true, &|sid| sid == "s5");
+        assert!(tips.iter().all(|t| t.kind != "concurrency"));
+    }
+
+    #[test]
+    fn tips_marathon_uses_hours_today_and_span_for_earlier_days() {
+        let mut d = DayAgg::default();
+        let mut s = SessionDay::default();
+        for slot in [0u16, 6, 12, 18, 24, 30, 36, 42] {
+            s.buckets.insert(slot, Bucket::default());
+        }
+        s.models.insert("claude-opus-5-5".into(), Use { w: 50.0, ..Default::default() });
+        d.sessions.insert("s1".into(), s);
+        let labels: HashMap<String, String> = [("s1".to_string(), "Alpha".to_string())].into();
+        let tips = compose_tips(&d, &[], &BTreeMap::new(), &labels, 100.0, true, &|_| false);
+        let m = tips.iter().find(|t| t.kind == "marathon").unwrap();
+        assert!(m.who.contains("Alpha") && m.who.contains("in 8 hours"), "{}", m.who);
+        for sd in d.sessions.values_mut() {
+            sd.buckets.clear();
+            sd.first = 1_000_000;
+            sd.last = 1_000_000 + 9 * MS_PER_HOUR;
+        }
+        let tips = compose_tips(&d, &[], &BTreeMap::new(), &labels, 100.0, false, &|_| false);
+        let m = tips.iter().find(|t| t.kind == "marathon").unwrap();
+        assert!(m.who.contains("spanning 9 hours"), "{}", m.who);
+    }
+
+    #[test]
+    fn tips_opus_subagents_only_over_five_percent() {
+        let mut d = DayAgg::default();
+        let mut s = SessionDay::default();
+        let mut u = Use::default();
+        u.t.input = 1_000_000;
+        u.w = crate::transcript::weight("claude-opus-5-5", &u.t, false);
+        s.models.insert("claude-opus-5-5".into(), u.clone());
+        s.sub = u.clone();
+        d.sessions.insert("s1".into(), s);
+        let tips = compose_tips(&d, &[], &BTreeMap::new(), &HashMap::new(), u.w * 100.0, true, &|_| false);
+        assert!(tips.iter().all(|t| t.kind != "opus"));
+        let tips = compose_tips(&d, &[], &BTreeMap::new(), &HashMap::new(), u.w * 10.0, true, &|_| false);
+        let t = tips.iter().find(|t| t.kind == "opus").unwrap();
+        assert!(t.text.contains("less on Sonnet") && t.usd > 0.0, "{}", t.text);
+    }
+
+    #[test]
+    fn tips_notetaker_and_cold_have_thresholds() {
+        let apps: BTreeMap<&'static str, Use> = [("notetaker", Use { w: 40.0, ..Default::default() })].into();
+        let sources = vec![
+            tip_source("Cold A", 10_000, 1, 100.0, (3, 150_000, 10.0)),
+            tip_source("Cold B", 10_000, 1, 90.0, (1, 60_000, 5.0)),
+        ];
+        let tips = compose_tips(&DayAgg::default(), &sources, &apps, &HashMap::new(), 1000.0, true, &|_| false);
+        let cold = tips.iter().find(|t| t.kind == "cold").unwrap();
+        assert!(cold.who.contains("Cold A") && cold.who.contains("Cold B"));
+        assert!(cold.text.contains("4 cold restarts"), "{}", cold.text);
+        assert!(tips.iter().any(|t| t.kind == "notetaker"));
+        let apps2: BTreeMap<&'static str, Use> = [("notetaker", Use { w: 20.0, ..Default::default() })].into();
+        let tips = compose_tips(&DayAgg::default(), &[], &apps2, &HashMap::new(), 1000.0, true, &|_| false);
+        assert!(tips.iter().all(|t| t.kind != "notetaker"));
+    }
+
+    #[test]
+    fn tips_are_capped_at_five_and_ordered_by_cost() {
+        let mut d = DayAgg::default();
+        for i in 0..6 {
+            let mut s = SessionDay::default();
+            s.buckets.insert(3, Bucket { w: [10.0, 0.0, 0.0, 0.0], out: 0 });
+            if i == 0 {
+                for slot in [0u16, 6, 12, 18, 24, 30, 36, 42] {
+                    s.buckets.insert(slot, Bucket::default());
+                }
+                let mut u = Use::default();
+                u.t.input = 500_000;
+                u.w = 60.0;
+                s.models.insert("claude-opus-5-5".into(), u.clone());
+                s.sub = u;
+            }
+            d.sessions.insert(format!("s{i}"), s);
+        }
+        let sources = vec![
+            tip_source("Heavy A", 400_000, 1, 300.0, (2, 100_000, 20.0)),
+            tip_source("Heavy B", 350_000, 1, 200.0, (0, 0, 0.0)),
+        ];
+        let apps: BTreeMap<&'static str, Use> = [("notetaker", Use { w: 40.0, ..Default::default() })].into();
+        let tips = compose_tips(&d, &sources, &apps, &HashMap::new(), 1000.0, true, &|_| false);
+        assert_eq!(tips.len(), 5, "{:?}", tips.iter().map(|t| t.kind).collect::<Vec<_>>());
+        assert_eq!(tips[0].kind, "context");
+        assert!(tips.iter().all(|t| t.kind != "cold"));
+        for w in tips.windows(2) {
+            assert!(w[0].w >= w[1].w);
+        }
+        let none = compose_tips(&DayAgg::default(), &[], &BTreeMap::new(), &HashMap::new(), 1000.0, true, &|_| false);
+        assert!(none.is_empty());
     }
 }
