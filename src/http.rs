@@ -227,8 +227,8 @@ impl Server {
             let mut sh = self.shared.lock().unwrap_or_else(|e| e.into_inner());
             (crate::payload::compose_live(&mut sh, now), crate::payload::compose_days(&sh, now))
         };
-        self.hub.set_live(live);
-        self.hub.set_days(days);
+        self.hub.set_live_at(live, now);
+        self.hub.set_days_at(days, now);
     }
 
     fn sse(&self, mut s: TcpStream) {

@@ -82,11 +82,12 @@ fn publish_live(shared: &Mutex<Shared>, hub: &Hub) {
     if hub.idle() {
         return;
     }
+    let now = now_ms();
     let json = {
         let mut sh = shared.lock().unwrap();
-        compose_live(&mut sh, now_ms())
+        compose_live(&mut sh, now)
     };
-    hub.set_live(json);
+    hub.set_live_at(json, now);
 }
 
 fn publish_days(shared: &Mutex<Shared>, hub: &Hub, force: bool) {
@@ -105,7 +106,7 @@ fn publish_days(shared: &Mutex<Shared>, hub: &Hub, force: bool) {
         sh.days_pending = false;
         compose_days(&sh, now)
     };
-    hub.set_days(json);
+    hub.set_days_at(json, now);
 }
 
 /// Publishes a days update that an earlier throttled call deferred.

@@ -11,8 +11,12 @@ const FEED_KEEP: usize = 400;
 struct State {
     live: Arc<String>,
     live_v: u64,
+    /// When the stored payloads were composed; an older one never replaces
+    /// a newer one (two workers and a reconnecting client compose at once).
+    live_at: i64,
     days: Arc<String>,
     days_v: u64,
+    days_at: i64,
     feed: VecDeque<(u64, String, Arc<String>)>,
     feed_v: u64,
 }
@@ -82,14 +86,35 @@ impl Hub {
     }
 
     pub fn set_live(&self, json: String) {
+        self.set_live_at(json, i64::MAX);
+    }
+
+    /// Stores a live payload composed at `at`, unless a newer one is stored.
+    pub fn set_live_at(&self, json: String, at: i64) {
         let mut s = self.st.lock().unwrap();
+        if at != i64::MAX {
+            if at < s.live_at {
+                return;
+            }
+            s.live_at = at;
+        }
         s.live = Arc::new(json);
         s.live_v += 1;
         self.cv.notify_all();
     }
 
     pub fn set_days(&self, json: String) {
+        self.set_days_at(json, i64::MAX);
+    }
+
+    pub fn set_days_at(&self, json: String, at: i64) {
         let mut s = self.st.lock().unwrap();
+        if at != i64::MAX {
+            if at < s.days_at {
+                return;
+            }
+            s.days_at = at;
+        }
         s.days = Arc::new(json);
         s.days_v += 1;
         self.cv.notify_all();
@@ -151,6 +176,17 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_older_payload_never_replaces_a_newer_one() {
+        let h = Hub::new();
+        h.set_live_at("new".into(), 200);
+        h.set_live_at("old".into(), 100);
+        assert_eq!(h.snapshot().0.contains("new"), true);
+        h.set_days_at("d2".into(), 50);
+        h.set_days_at("d1".into(), 40);
+        assert!(h.snapshot().0.contains("d2"));
+    }
 
     #[test]
     fn idle_marks_stale_until_a_client_connects() {

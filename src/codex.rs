@@ -400,7 +400,9 @@ impl CodexTail {
         self.agg.prune(day - (WEEK_DAYS - 1), now_ms, self.off);
         let tracked: std::collections::HashSet<&str> = self.files.values().map(|t| t.sid.as_str()).collect();
         self.sessions.retain(|id, s| s.last >= window_start_ms || tracked.contains(id.as_str()));
-        if self.limit.as_ref().is_some_and(|l| l.ts < window_start_ms) {
+        // Codex's limit window can be weeks long: keep its last reading until
+        // Codex's own reset time passes, not until the line is a few days old.
+        if self.limit.as_ref().is_some_and(|l| l.resets_ms <= now_ms) {
             self.limit = None;
             self.agg.dirty = true;
         }
@@ -546,6 +548,19 @@ impl CodexTail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limit_line_lasts_until_codex_resets_it() {
+        let (root, _) = tmp("limit");
+        let mut t = CodexTail::new(root, 330);
+        let day = 20_000;
+        let ws = 1_000_000_000_000;
+        t.limit = Some(CodexLimit { ts: ws - 5 * 86_400_000, pct: 18.0, win_min: 43_200, resets_ms: ws + 86_400_000, plan: None });
+        t.prune(day, ws, ws);
+        assert!(t.limit.is_some(), "an old reading with a future reset stays");
+        t.prune(day, ws, ws + 2 * 86_400_000);
+        assert!(t.limit.is_none(), "dropped once Codex's reset has passed");
+    }
     use std::io::Write;
 
     const UUID: &str = "00000000-0000-4000-8000-000000000001";
