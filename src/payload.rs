@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::agg::{ColdUse, DayAgg, Use, WeekDay, WindowEst, WEEK_DAYS};
 use crate::history::{History, MONTH_DAYS};
-use crate::projects::{self, ProjectMap, NO_PROJECT};
+use crate::projects::{self, ProjectMap, NO_PROJECT, OTHER};
 use crate::sys::{memory_bytes, Sys};
 use crate::t3::{ActiveRun, Ctx, Pr, RunRow, Subagent, ThreadMeta, Waiting};
 use crate::tail::{SessionInfo, TailStats};
@@ -125,7 +125,7 @@ pub fn build_month(history: &History, week: &WeekPart, today: i32) -> Vec<MonthD
     let mut out: Vec<MonthDayOut> = history
         .days
         .iter()
-        .filter(|d| d.day < today - (crate::agg::WEEK_DAYS - 1))
+        .filter(|d| d.day >= today - (MONTH_DAYS - 1) && d.day < today - (WEEK_DAYS - 1))
         .map(|d| MonthDayOut {
             day: day_label(d.day),
             t: d.t,
@@ -242,6 +242,38 @@ pub fn build_projects(sh: &Shared, now: i64) -> Vec<ProjectOut> {
         }
     }
 
+    // The plate shows at most fifteen rows. Fold the tail into "Other"
+    // instead of dropping it, so the rows always add up to the month.
+    if acc.len() > MAX_PROJECT_ROWS {
+        let mut ranked: Vec<_> = acc.into_iter().collect();
+        ranked.sort_by(|a, b| {
+            b.1.w30
+                .partial_cmp(&a.1.w30)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        let mut kept: BTreeMap<String, ProjectAcc> = ranked.drain(..MAX_PROJECT_ROWS - 1).collect();
+        let mut other = kept.remove(OTHER).unwrap_or_default();
+        if other.days.len() != MONTH_DAYS as usize {
+            other.days = vec![0.0; MONTH_DAYS as usize];
+        }
+        for (_, e) in ranked {
+            other.w30 += e.w30;
+            other.w7 += e.w7;
+            other.n30 += e.n30;
+            other.out30 += e.out30;
+            for (i, w) in e.days.into_iter().enumerate() {
+                if i < other.days.len() {
+                    other.days[i] += w;
+                }
+            }
+            other.prs.extend(e.prs);
+            other.merged.extend(e.merged);
+        }
+        kept.insert(OTHER.to_string(), other);
+        acc = kept;
+    }
+
     let mut out: Vec<ProjectOut> = acc
         .into_iter()
         .map(|(name, e)| ProjectOut {
@@ -256,9 +288,11 @@ pub fn build_projects(sh: &Shared, now: i64) -> Vec<ProjectOut> {
         })
         .collect();
     out.sort_by(|a, b| b.w30.partial_cmp(&a.w30).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.name.cmp(&b.name)));
-    out.truncate(15);
     out
 }
+
+/// Rows shown by the project plate; the rest are folded into "Other".
+const MAX_PROJECT_ROWS: usize = 15;
 
 /// Short display forms for the tip lines: "612K", "1.2M".
 fn big_num(n: f64) -> String {
@@ -418,8 +452,7 @@ pub fn projects_from_day(
     smap: &HashMap<String, String>,
 ) -> ProjectMap {
     let mut full = ProjectMap::new();
-    for (sid, s) in &agg.sessions {
-        let info = sessions.get(sid);
+    let name_of = |sid: &str, info: Option<&SessionInfo>| {
         let (is_t3, project, cwd) = match app_of(sid, info, smap) {
             App::T3 => {
                 let th = smap.get(sid).map(String::as_str).unwrap_or("");
@@ -427,14 +460,25 @@ pub fn projects_from_day(
             }
             _ => (false, None, info.and_then(|i| i.cwd.as_deref())),
         };
-        let name = projects::attribute(is_t3, project, cwd);
-        let (mut w, mut n, mut out) = (0.0, 0, 0);
-        for u in s.models.values() {
-            w += u.w;
-            n += u.n;
-            out += u.t.output;
+        projects::attribute(is_t3, project, cwd)
+    };
+    if !agg.sessions.is_empty() {
+        for (sid, s) in &agg.sessions {
+            let (mut w, mut n, mut out) = (0.0, 0, 0);
+            for u in s.models.values() {
+                w += u.w;
+                n += u.n;
+                out += u.t.output;
+            }
+            projects::add(&mut full, &name_of(sid, sessions.get(sid)), w, n, out);
         }
-        projects::add(&mut full, &name, w, n, out);
+    } else {
+        // A cold start reads days 4 to 7 straight into compact days. Their
+        // session detail was never built, but the tiny totals were, and the
+        // session metadata is still here when `capture_projects` runs.
+        for (sid, u) in &agg.compact_sessions {
+            projects::add(&mut full, &name_of(sid, sessions.get(sid)), u.w, u.n, u.out);
+        }
     }
     projects::fold(&full)
 }
@@ -1703,8 +1747,8 @@ mod tests {
         let today = day_of(now, OFF);
         add(&mut a, day_start_ms(today, OFF) + MS_PER_HOUR, "claude-opus-5-5", 10, "t");
         let week = build_week(&a.week(today), &HashMap::new(), &[], OFF);
-        let mut h = History { v: HISTORY_VERSION, days: Vec::new() };
-        for back in 8..=32 {
+        let mut h = History { v: HISTORY_VERSION, days: Vec::new(), checked: Vec::new() };
+        for back in 7..=32 {
             h.upsert(HistDay {
                 day: today - back,
                 n: back as u64,
@@ -1718,7 +1762,7 @@ mod tests {
         }
         let m = build_month(&h, &week, today);
         assert_eq!(m.len(), MONTH_DAYS as usize);
-        assert_eq!(m[0].day, day_label(today - 30));
+        assert_eq!(m[0].day, day_label(today - (MONTH_DAYS - 1)));
         assert_eq!(m[m.len() - 1].day, day_label(today));
         assert_eq!(m[m.len() - 1].t[1], 10);
         assert_eq!(m[0].codex_tokens, 3);
@@ -1786,6 +1830,75 @@ mod tests {
         assert_eq!(p["Dashboard"].out, 20);
         assert_eq!(p["demo"].w, 2.0);
         assert_eq!(p["demo"].out, 10);
+    }
+
+    #[test]
+    fn projects_from_compacted_days_add_up_to_the_month() {
+        use crate::agg::{Agg, UsageIn};
+        use crate::history::{HistDay, History, HISTORY_VERSION};
+        use crate::timeutil::MS_PER_HOUR;
+
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        let mut sh = Shared::new(OFF);
+
+        // Twenty-three history days, each split over twenty projects (more
+        // than the plate shows) so the tail has to fold into "Other".
+        let mut h = History { v: HISTORY_VERSION, days: Vec::new(), checked: Vec::new() };
+        for back in 8..=30 {
+            let mut pm = ProjectMap::new();
+            for i in 0..20 {
+                projects::add(&mut pm, &format!("p{i:02}"), 0.5, 1, 10);
+            }
+            assert!(h.upsert(HistDay { day: today - back, w: 10.0, projects: pm, ..Default::default() }));
+        }
+
+        // Four compact days: read straight into the compact window, so they
+        // have only per-session totals and no sessions at all.
+        let mut agg = Agg::default();
+        let mut wp = BTreeMap::new();
+        for back in 3..=6 {
+            let day = today - back;
+            let ts = day_start_ms(day, OFF) + 5 * MS_PER_HOUR;
+            let tok = Tokens { output: 100, ..Default::default() };
+            assert!(agg.add_usage_at(
+                UsageIn {
+                    session: "t3session",
+                    sub: false,
+                    observer: false,
+                    ts_ms: ts,
+                    model: "claude-opus-5-5",
+                    tokens: &tok,
+                    fast: false,
+                    msg_id: Some(&format!("m{back}")),
+                    prev_ms: 0,
+                    codex: false,
+                },
+                OFF,
+                now,
+            ));
+            let d = &agg.days[&day];
+            assert!(d.sessions.is_empty() && !d.compact_sessions.is_empty());
+            let mut threads = HashMap::new();
+            threads.insert("th".to_string(), ThreadMeta { id: "th".into(), project: Some("Dashboard".into()), ..Default::default() });
+            let smap: HashMap<String, String> = [("t3session".to_string(), "th".to_string())].into();
+            let pm = projects_from_day(d, &HashMap::new(), &threads, &smap);
+            assert_eq!(pm["Dashboard"].w, d.models["claude-opus-5-5"].w);
+            assert_eq!(pm["Dashboard"].out, 100);
+            wp.insert(day, pm);
+        }
+        sh.tx.week_projects = Arc::new(wp);
+        sh.tx.history_projects = Arc::new(h.days.iter().map(|d| (d.day, d.projects.clone())).collect());
+        let week = build_week(&agg.week(today), &HashMap::new(), &[], OFF);
+        let month = build_month(&h, &week, today);
+
+        let out = build_projects(&sh, now);
+        assert_eq!(out.len(), MAX_PROJECT_ROWS);
+        assert!(out.iter().any(|p| p.name == OTHER), "the tail folds into Other: {out:?}");
+        assert!(out.iter().any(|p| p.name == "Dashboard"));
+        let sum: f64 = out.iter().map(|p| p.w30).sum();
+        let total: f64 = month.iter().map(|m| m.w).sum();
+        assert!((sum - total).abs() < 1.0, "projects {sum}, month {total}");
     }
 
     // ---------------------------------------------------------------- tips

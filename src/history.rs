@@ -82,15 +82,26 @@ fn add_tokens(into: &mut [u64; 5], t: &Tokens) {
 pub struct History {
     pub v: u32,
     pub days: Vec<HistDay>,
+    /// Backfill days already looked at, including days with no usage. Without
+    /// this, an empty day always counts as missing and every start reads the
+    /// same gigabyte again. No version bump: old files simply start with an
+    /// empty list and keep all their existing days.
+    #[serde(default)]
+    pub checked: Vec<i32>,
 }
 
 impl History {
+    /// Days that need no backfill: those with data and those already checked.
+    pub fn have(&self) -> std::collections::HashSet<i32> {
+        self.days.iter().map(|d| d.day).chain(self.checked.iter().copied()).collect()
+    }
+
     /// Loads the month, or starts a fresh one when the file is missing or
     /// carries another version. The seven-day cache is never consulted.
     pub fn load(path: &Path) -> Self {
         match crate::state::load::<History>(path) {
             Some(h) if h.v == HISTORY_VERSION => h,
-            _ => History { v: HISTORY_VERSION, days: Vec::new() },
+            _ => History { v: HISTORY_VERSION, days: Vec::new(), checked: Vec::new() },
         }
     }
 
@@ -121,7 +132,24 @@ impl History {
             let extra = self.days.len() - HISTORY_MAX;
             self.days.drain(..extra);
         }
+        self.checked.retain(|d| *d >= today - MONTH_DAYS && *d <= today);
         self.days.len() != before
+    }
+
+    /// Remember backfill days, empty ones included, so the next start skips
+    /// them. Returns true only when a day was newly recorded.
+    pub fn mark_checked(&mut self, days: impl IntoIterator<Item = i32>) -> bool {
+        let mut changed = false;
+        for day in days {
+            if !self.checked.contains(&day) {
+                self.checked.push(day);
+                changed = true;
+            }
+        }
+        if changed {
+            self.checked.sort_unstable();
+        }
+        changed
     }
 
     /// Moves every day that `prune` is about to drop (older than `min_day`)
@@ -184,7 +212,7 @@ mod tests {
         let mut agg = Agg::default();
         let day = TODAY - (WEEK_DAYS - 1);
         agg.days.insert(day, a_day(day, 4321));
-        let mut h = History { v: HISTORY_VERSION, days: Vec::new() };
+        let mut h = History { v: HISTORY_VERSION, days: Vec::new(), checked: Vec::new() };
         assert!(h.capture_expired(&agg.days, day + 1, TODAY, &HashMap::new()));
         let moved = &h.days[0];
         assert_eq!(moved.day, day);
@@ -202,7 +230,7 @@ mod tests {
 
     #[test]
     fn history_is_capped_at_31_entries() {
-        let mut h = History { v: HISTORY_VERSION, days: Vec::new() };
+        let mut h = History { v: HISTORY_VERSION, days: Vec::new(), checked: Vec::new() };
         for back in 0..40 {
             assert!(h.upsert(HistDay { day: TODAY - back, n: 1, ..Default::default() }));
         }
@@ -218,7 +246,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let hp = dir.join("history.json");
-        let mut h = History { v: HISTORY_VERSION, days: Vec::new() };
+        let mut h = History { v: HISTORY_VERSION, days: Vec::new(), checked: Vec::new() };
         for back in 8..=30 {
             h.upsert(HistDay { day: TODAY - back, n: back as u64, t: [1, 2, 3, 4, 5], w: 12.5, ..Default::default() });
         }
@@ -250,12 +278,44 @@ mod tests {
         assert_eq!(loaded.v, HISTORY_VERSION);
         assert!(loaded.days.is_empty(), "the old days are discarded so backfill refills them");
         // A current file round trips its per-project map.
-        let mut fresh = History { v: HISTORY_VERSION, days: Vec::new() };
+        let mut fresh = History { v: HISTORY_VERSION, days: Vec::new(), checked: Vec::new() };
         let mut p = ProjectMap::new();
         projects::add(&mut p, "demo", 2.0, 3, 40);
         assert!(fresh.upsert(HistDay { day: TODAY - 10, projects: p.clone(), ..Default::default() }));
         state::save(&hp, &fresh).unwrap();
         assert_eq!(History::load(&hp), fresh);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn checked_days_survive_a_save_and_keep_existing_days_on_upgrade() {
+        let dir = std::env::temp_dir().join(format!("sb-checked-{}-{TODAY}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let hp = dir.join("history.json");
+        // An old file has days but no checked list: it loads without a version
+        // bump and keeps every day it already had.
+        state::save(&hp, &serde_json::json!({
+            "v": HISTORY_VERSION,
+            "days": [{ "day": TODAY - 10, "t": [1, 2, 3, 4, 5], "n": 1, "w": 12.5, "fam": [12.5, 0, 0, 0], "codex_tokens": 0, "active_min": 5, "projects": {} }],
+        })).unwrap();
+        let mut h = History::load(&hp);
+        assert_eq!(h.days.len(), 1);
+        assert!(h.checked.is_empty());
+        assert_eq!(h.have().len(), 1);
+
+        let days: Vec<i32> = (TODAY - BACKFILL_OLDEST..=TODAY - BACKFILL_NEWEST).collect();
+        assert!(h.mark_checked(days.clone()));
+        assert!(!h.mark_checked(days), "marking twice changes nothing");
+        assert_eq!(h.have().len(), 23, "the existing day is inside the checked range");
+        let bytes = state::save(&hp, &h).unwrap();
+        assert!(bytes < 10_000, "history.json is {bytes} bytes");
+        assert_eq!(History::load(&hp), h);
+
+        // Days that fall out of the month drop out of the checked list too.
+        h.checked.push(TODAY - 40);
+        h.trim(TODAY);
+        assert!(!h.checked.contains(&(TODAY - 40)));
         fs::remove_dir_all(dir).ok();
     }
 }

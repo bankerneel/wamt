@@ -25,6 +25,9 @@ pub struct BackfillResult {
     pub days: Vec<HistDay>,
     pub bytes: u64,
     pub ms: u128,
+    /// Days looked at on this run, including those with no usage. Saved in
+    /// history so a later start does not read the same files again.
+    pub checked: Vec<i32>,
 }
 
 /// Nice the calling thread so the backfill never competes with live data.
@@ -167,12 +170,13 @@ pub fn backfill(
     session_projects: &HashMap<String, String>,
 ) -> BackfillResult {
     let t0 = Instant::now();
-    let mut out = BackfillResult { days: Vec::new(), bytes: 0, ms: 0 };
+    let mut out = BackfillResult { days: Vec::new(), bytes: 0, ms: 0, checked: Vec::new() };
     let missing = missing_days(today, have);
     if missing.is_empty() {
         out.ms = t0.elapsed().as_millis();
         return out;
     }
+    out.checked = missing.clone();
     let want: HashSet<i32> = missing.iter().copied().collect();
     let from = day_start_ms(today - BACKFILL_OLDEST, off);
     let to = day_start_ms(today - (WEEK_DAYS - 1), off);
@@ -363,6 +367,29 @@ mod tests {
         // Without the T3 snapshot the same session falls back to its folder.
         let res = backfill(&root, None, OFF, TODAY, &HashSet::new(), &HashMap::new());
         assert_eq!(res.days[0].projects["outside"].out, 150);
+    }
+
+    #[test]
+    fn a_second_start_with_nothing_missing_does_no_backfill() {
+        let root = tmp("checked");
+        let f = root.join("-Users-x-projects-demo/s3.jsonl");
+        let day = TODAY - 20;
+        append(&f, &(line("a", &crate::timeutil::iso_ms(day_start_ms(day, OFF) + 5 * MS_PER_HOUR), 100)));
+        set_mtime(&f, day_start_ms(day, OFF) + MS_PER_HOUR);
+
+        let first = backfill(&root, None, OFF, TODAY, &HashSet::new(), &HashMap::new());
+        assert_eq!(first.days.len(), 1);
+        assert!(first.checked.contains(&day), "the empty days are checked too");
+        assert!(first.bytes > 0);
+
+        // History keeps both the day and the checked list. On the next start
+        // every day in the range is accounted for, so no file is read at all.
+        let have: HashSet<i32> = first.days.iter().map(|d| d.day).chain(first.checked.iter().copied()).collect();
+        assert!(missing_days(TODAY, &have).is_empty());
+        let second = backfill(&root, None, OFF, TODAY, &have, &HashMap::new());
+        assert!(second.days.is_empty());
+        assert!(second.checked.is_empty());
+        assert_eq!(second.bytes, 0);
     }
 
     #[test]

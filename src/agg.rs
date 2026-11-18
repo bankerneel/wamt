@@ -124,6 +124,13 @@ pub struct DayAgg {
     /// keep their project attribution. Already folded to the top twelve.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub projects: BTreeMap<String, crate::projects::ProjUse>,
+    /// Compact days only: weight, requests and output tokens per session.
+    /// Just enough to attribute a day read straight into the compacted window
+    /// on a cold start; no models, hours, buckets or dedupe keys are kept.
+    /// Session detail is still there when `capture_projects` runs, so the map
+    /// is never needed for days that spent time in the detail window.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub compact_sessions: BTreeMap<String, crate::projects::ProjUse>,
 }
 
 impl Default for DayAgg {
@@ -136,6 +143,7 @@ impl Default for DayAgg {
             active: [0; 5],
             subs: BTreeMap::new(),
             projects: BTreeMap::new(),
+            compact_sessions: BTreeMap::new(),
         }
     }
 }
@@ -310,7 +318,11 @@ impl Agg {
             d.active[slot / 64] |= 1u64 << (slot % 64);
         }
         if !detail {
-            // Older than the minute cells anyway.
+            // Older than the minute cells anyway. Keep a tiny per-session
+            // total so this day can still be attributed to projects once the
+            // session metadata is available (cold start reads old days here
+            // directly, without ever creating a `SessionDay`).
+            crate::projects::add(&mut d.compact_sessions, u.session, w, 1, u.tokens.output);
             self.dirty = true;
             return true;
         }
@@ -969,6 +981,49 @@ mod tests {
         assert!(d.hours[2][1] > 0.0 && d.hours[2][2] > 0.0);
         assert_eq!(d.active_slots(), 1);
         assert!(a.dirty);
+    }
+
+    #[test]
+    fn compacted_days_keep_a_tiny_per_session_total() {
+        let mut a = Agg::default();
+        let now = now_ms();
+        let today = day_of(now, OFF);
+        let day = today - 5; // read straight into the compact window on a cold start
+        let ts = day_start_ms(day, OFF) + 5 * MS_PER_HOUR;
+        let t1 = Tokens { output: 20, ..Default::default() };
+        let t2 = Tokens { output: 7, ..Default::default() };
+        fn add_at(a: &mut Agg, session: &str, id: &str, model: &str, tokens: &Tokens, ts: i64, now: i64) -> bool {
+            a.add_usage_at(
+                UsageIn {
+                    session,
+                    sub: false,
+                    observer: false,
+                    ts_ms: ts,
+                    model,
+                    tokens,
+                    fast: false,
+                    msg_id: Some(id),
+                    prev_ms: 0,
+                    codex: false,
+                },
+                OFF,
+                now,
+            )
+        }
+        let add = |a: &mut Agg, s: &str, id: &str, m: &str, t: &Tokens| add_at(a, s, id, m, t, ts, now);
+        assert!(add(&mut a, "s1", "m1", "claude-opus-5-5", &t1));
+        assert!(add(&mut a, "s2", "m2", "claude-sonnet-5-5", &t2));
+        assert!(!add(&mut a, "s1", "m1", "claude-opus-5-5", &t1), "dedupe is unchanged");
+        let d = &a.days[&day];
+        assert!(d.is_compact() && d.sessions.is_empty());
+        assert_eq!(d.compact_sessions.len(), 2);
+        assert_eq!(d.compact_sessions["s1"].out, 20);
+        assert_eq!(d.compact_sessions["s1"].n, 1);
+        assert_eq!(d.compact_sessions["s2"].out, 7);
+        let session_w: f64 = d.compact_sessions.values().map(|u| u.w).sum();
+        let model_w: f64 = d.models.values().map(|u| u.w).sum();
+        assert!((session_w - model_w).abs() < 1e-9);
+        assert_eq!(d.total().n, 2);
     }
 
     #[test]

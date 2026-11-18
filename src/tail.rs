@@ -63,7 +63,9 @@ pub struct TailCache {
     pub quiet_before: i64,
 }
 
-pub const CACHE_VERSION: u32 = 6;
+/// Bumped for compact days keeping per-session totals: an older cache has no
+/// way to attribute days 4 to 7, so those days are read once again.
+pub const CACHE_VERSION: u32 = 7;
 
 #[derive(Default, Clone, Debug, Serialize)]
 pub struct TailStats {

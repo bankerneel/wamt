@@ -490,9 +490,17 @@ fn capture_projects(t: &mut tail::Tailer, shared: &Mutex<Shared>, day: i32) {
     let empty_s: HashMap<String, String> = HashMap::new();
     let (threads, smap) = sh.t3.as_ref().map(|p| (p.threads.as_ref(), p.sessions.as_ref())).unwrap_or((&empty_t, &empty_s));
     for (d, a) in t.agg.days.iter_mut() {
-        if *d <= day - DETAIL_DAYS && !a.sessions.is_empty() && a.projects.is_empty() {
-            a.projects = payload::projects_from_day(a, &t.sessions, threads, smap);
+        if *d > day - DETAIL_DAYS || !a.projects.is_empty() {
+            continue;
         }
+        // A day that aged out of the detail window still has its sessions;
+        // one read straight into the compact window on a cold start has only
+        // the tiny per-session totals. Either way the session metadata is
+        // still here now, before `prune_sessions` forgets it.
+        if a.sessions.is_empty() && a.compact_sessions.is_empty() {
+            continue;
+        }
+        a.projects = payload::projects_from_day(a, &t.sessions, threads, smap);
     }
 }
 
@@ -579,7 +587,9 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
         let meta_ready = shared.lock().unwrap().t3.is_some() || (first_scan_ms > 0 && now - first_scan_ms > 60_000);
         if first_scan_ms > 0
             && meta_ready
-            && t.agg.days.iter().any(|(d, a)| *d <= day - DETAIL_DAYS && !a.sessions.is_empty())
+            && t.agg.days.iter().any(|(d, a)| {
+                *d <= day - DETAIL_DAYS && a.projects.is_empty() && (!a.sessions.is_empty() || !a.compact_sessions.is_empty())
+            })
         {
             capture_projects(&mut t, &shared, day);
             t.agg.prune(day - (WEEK_DAYS - 1), now, off);
@@ -591,7 +601,7 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
             rebuild = true;
         }
         if backfill_pending && meta_ready {
-            let have: HashSet<i32> = history.days.iter().map(|d| d.day).collect();
+            let have = history.have();
             if !backfill::missing_days(day, &have).is_empty() {
                 let session_projects: HashMap<String, String> = {
                     let sh = shared.lock().unwrap();
@@ -679,8 +689,13 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
             // Fill older days on a separate low-priority thread, once T3's
             // project titles are available for attribution. The live tailer
             // keeps reading, publishing and saving while this runs.
-            let have: HashSet<i32> = history.days.iter().map(|d| d.day).collect();
-            backfill_pending = !backfill::missing_days(day, &have).is_empty();
+            let have = history.have();
+            let missing = backfill::missing_days(day, &have);
+            backfill_pending = !missing.is_empty();
+            if !backfill_pending {
+                // Every day in the range has data or was checked already.
+                log("history backfill: skipped, 0 days missing, 0 MB read");
+            }
         }
         // Pick up a finished backfill without waiting for it: try_recv never
         // blocks the live data.
@@ -692,12 +707,17 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
                         added += 1;
                     }
                 }
-                if added > 0 {
+                // Empty days still count: recording them is what makes the
+                // next start skip the read instead of re-reading the logs.
+                let checked = history.mark_checked(r.checked);
+                if added > 0 || checked {
                     history.trim(day);
                     match state::save(&history_path, &history) {
-                        Ok(n) => log(format!("history: backfilled {added} days, {} days kept in {n} bytes", history.days.len())),
+                        Ok(n) => log(format!("history: backfilled {added} days, {} days kept in {n} bytes ({} checked)", history.days.len(), history.checked.len())),
                         Err(e) => log(format!("history save failed: {e}")),
                     }
+                }
+                if added > 0 {
                     rebuild = true;
                 }
                 backfill_rx = None;
