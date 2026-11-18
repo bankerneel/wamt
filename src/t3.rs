@@ -19,7 +19,7 @@ const LIVE_RUN_STATUSES: &str = "('queued','preparing','starting','running','wai
 const LAUNCH_TOOLS: &str = "('mcp__t3-code__t3_thread_launch','mcp__t3-code__create_threads')";
 const STEP_SKIP: &str = "('checkpoint','system_notice','notification')";
 
-/// Tables and columns Switchboard relies on.
+/// Tables and columns wamt relies on.
 const REQUIRED: &[(&str, &[&str])] = &[
     ("orchestration_events", &["sequence", "event_type", "stream_id", "occurred_at", "payload_json"]),
     (
@@ -995,12 +995,12 @@ mod tests {
             c.execute_batch(
                 r#"INSERT INTO projection_projects VALUES ('p1','demo');
                  INSERT INTO orchestration_v2_projection_threads VALUES
-                   ('hq','p1','HQ','2026-11-17T08:00:00.000Z','2026-11-17T09:00:00.000Z',NULL,NULL,
+                   ('orch','p1','Orchestrator','2026-11-17T08:00:00.000Z','2026-11-17T09:00:00.000Z',NULL,NULL,
                     '{"modelSelection":{"model":"claude-opus-5-5","options":[{"id":"effort","value":"xhigh"},{"id":"fastMode","value":false}]},"creationSource":"web","pullRequests":[{"number":7,"repository":"o/r","linkedAt":"2026-11-17T09:00:00.000Z","snapshot":{"state":"open","title":"Fix"}}]}','claudeAgent'),
                    ('kid','p1','Backend','2026-11-17T08:30:00.000Z','2026-11-17T09:00:00.000Z',NULL,NULL,
                     '{"modelSelection":{"model":"claude-opus-5-5","options":[]},"creationSource":"mcp"}','claudeAgent');
                  INSERT INTO orchestration_v2_projection_turn_items VALUES
-                   ('i1','hq','r1',1,'dynamic_tool','completed','2026-11-17T08:30:01.000Z','{"toolName":"mcp__t3-code__t3_thread_launch","output":{"threadId":"kid","text":"secret"}}'),
+                   ('i1','orch','r1',1,'dynamic_tool','completed','2026-11-17T08:30:01.000Z','{"toolName":"mcp__t3-code__t3_thread_launch","output":{"threadId":"kid","text":"secret"}}'),
                    ('i2','kid','r2',1,'reasoning','completed','2026-11-17T09:00:00.000Z','{}'),
                    ('i3','kid','r2',2,'command_execution','running','2026-11-17T09:00:05.000Z','{"startedAt":"2026-11-17T09:00:04.000Z","input":"rm -rf secret"}');
                  INSERT INTO orchestration_v2_projection_runs VALUES
@@ -1045,13 +1045,13 @@ mod tests {
         let mut t = T3::open(&fixture("launch", false)).unwrap();
         t.load_threads(None).unwrap();
         assert_eq!(t.full_launch_scan().unwrap(), 1);
-        assert_eq!(t.launch.get("kid").map(String::as_str), Some("hq"));
+        assert_eq!(t.launch.get("kid").map(String::as_str), Some("orch"));
         t.load_threads(None).unwrap();
-        assert_eq!(t.threads["kid"].launcher.as_deref(), Some("hq"));
-        let hq = &t.threads["hq"];
-        assert_eq!(hq.effort.as_deref(), Some("xhigh"));
-        assert_eq!(hq.prs.len(), 1);
-        assert_eq!(hq.prs[0].title.as_deref(), Some("Fix"));
+        assert_eq!(t.threads["kid"].launcher.as_deref(), Some("orch"));
+        let root = &t.threads["orch"];
+        assert_eq!(root.effort.as_deref(), Some("xhigh"));
+        assert_eq!(root.prs.len(), 1);
+        assert_eq!(root.prs[0].title.as_deref(), Some("Fix"));
     }
 
     #[test]
@@ -1082,7 +1082,7 @@ mod tests {
                    ('i6','kid','r2',5,'dynamic_tool','completed','2026-11-17T09:03:00.000Z','{"toolName":"mcp__t3-code__t3_thread_send"}'),
                    ('i7','kid','r2',6,'assistant_message','completed','2026-11-17T09:04:00.000Z','{"text":"hello secret"}'),
                    ('old','kid','r1',7,'file_change','completed','2026-11-16T09:04:00.000Z','{}'),
-                   ('oth','hq','r9',1,'command_execution','completed','2026-11-17T09:04:00.000Z','{}');
+                   ('oth','orch','r9',1,'command_execution','completed','2026-11-17T09:04:00.000Z','{}');
                  INSERT INTO orchestration_v2_projection_runs VALUES
                    ('r1','kid',1,'completed','2026-11-17T08:30:00.000Z','2026-11-17T08:40:00.000Z','{"startedAt":"2026-11-17T08:31:00.000Z","modelSelection":{"model":"claude-sonnet-5-5"},"delegatedTaskId":"d1"}'),
                    ('r0','kid',0,'completed','2026-11-16T08:30:00.000Z','2026-11-16T08:40:00.000Z','{}');
@@ -1197,7 +1197,7 @@ mod tests {
                  INSERT INTO orchestration_v2_projection_runs VALUES
                    ('r1','kid',1,'completed','2026-11-17T08:30:00.000Z','2026-11-17T08:40:00.000Z','{\"startedAt\":\"2026-11-17T08:31:00.000Z\",\"modelSelection\":{\"model\":\"claude-sonnet-5-5\"}}'),
                    ('r-old','kid',0,'completed','2026-11-16T08:30:00.000Z','2026-11-16T08:40:00.000Z','{}'),
-                   ('rhq','hq',1,'completed','2026-11-17T10:00:00.000Z','2026-11-17T10:30:00.000Z','{\"startedAt\":\"2026-11-17T10:00:00.000Z\"}'),
+                   ('rroot','orch',1,'completed','2026-11-17T10:00:00.000Z','2026-11-17T10:30:00.000Z','{\"startedAt\":\"2026-11-17T10:00:00.000Z\"}'),
                    ('rwait','waiter',1,'waiting','2026-11-17T11:00:00.000Z',NULL,'{\"startedAt\":\"2026-11-17T11:00:00.000Z\"}');
                  INSERT INTO orchestration_v2_projection_turn_items VALUES
                    ('appr','kid','r2',2,'approval_request','completed','2026-11-17T09:30:00.000Z','{\"startedAt\":\"2026-11-17T09:25:00.000Z\"}');",
@@ -1209,8 +1209,8 @@ mod tests {
         let now = parse_ts_ms("2026-11-17T12:00:00Z").unwrap();
         let lanes = t.timeline_lanes(d17, d17 + 24 * 3_600_000, now, 40).unwrap();
         // Most active first: the long still-open kid run, then the waiter,
-        // then the short HQ run. The 16 Nov run never appears.
-        assert_eq!(lanes.iter().map(|l| l.thread.as_str()).collect::<Vec<_>>(), vec!["kid", "waiter", "hq"]);
+        // then the short root run. The 16 Nov run never appears.
+        assert_eq!(lanes.iter().map(|l| l.thread.as_str()).collect::<Vec<_>>(), vec!["kid", "waiter", "orch"]);
         let kid = &lanes[0];
         assert_eq!(kid.runs.iter().map(|r| r.n).collect::<Vec<_>>(), vec![1, 3]);
         assert!(!kid.runs.iter().any(|r| r.n == 0), "the out-of-day run is excluded");

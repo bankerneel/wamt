@@ -1,0 +1,134 @@
+@font-face {
+  font-family: Archivo;
+  src: url(archivo.woff2) format("woff2");
+  font-weight: 100 900;
+}
+
+@font-face {
+  font-family: Caveat;
+  src: url(caveat.woff2) format("woff2");
+  font-weight: 400 700;
+}
+
+:root {
+  --dream: radial-gradient(70% 55% at 18% 12%, #ffd9a0 0%, transparent 60%), radial-gradient(60% 50% at 82% 8%, #ffb3c7 0%, transparent 58%), radial-gradient(85% 70% at 50% 100%, #b9c6ff 0%, transparent 62%), linear-gradient(180deg, #fbe7d2 0%, #ecdcf5 52%, #d7dfff 100%);
+  --panel: #fffaf2;
+  --ink: #3a2f3d;
+  --shadow: #3a2f3d;
+  --ticket: #f2dca8;
+  --w-top: #3f7fc2;
+  --w-mid: #8d5fc0;
+  --w-bot: #d4645a;
+  --w-shadow: #3a2f3d;
+}
+
+.dark {
+  --dream: radial-gradient(70% 55% at 18% 12%, #4a2f3f 0%, transparent 60%), radial-gradient(60% 50% at 82% 8%, #3b2a4d 0%, transparent 58%), radial-gradient(85% 70% at 50% 100%, #24304d 0%, transparent 62%), linear-gradient(180deg, #2a1f2b 0%, #241d33 52%, #1b1b2e 100%);
+  --panel: #342b3f;
+  --ink: #f2e9dc;
+  --shadow: #16111c;
+  --w-top: #a9c2dc;
+  --w-mid: #c3aad0;
+  --w-bot: #e0a08f;
+  --w-shadow: #000;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--dream);
+  font-family: Archivo, sans-serif;
+}
+
+main {
+  width: 1600px;
+  height: 480px;
+  display: grid;
+  grid-template-columns: 950px 464px;
+  align-items: center;
+  justify-content: center;
+  gap: 38px;
+}
+
+.panel {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 43px 34px 43px 22px;
+  border: 2px solid var(--ink);
+  border-radius: 20px;
+  background: var(--panel);
+  box-shadow: 8px 8px 0 var(--shadow);
+}
+
+.logo {
+  width: 192px;
+  height: 192px;
+}
+
+.copy { min-width: 0; }
+
+.wordmark {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  margin: 0;
+}
+
+.wordmark svg {
+  display: block;
+  width: 594px;
+  height: auto;
+}
+
+.tagline {
+  margin: 19px 0 0;
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.aside {
+  display: inline-block;
+  margin: 21px 0 0;
+  padding: 2px 14px 5px;
+  border: 2px solid #3a2f3d;
+  background: var(--ticket);
+  box-shadow: 3px 3px 0 var(--shadow);
+  color: #3a2f3d;
+  font: 700 28px/1 Caveat, cursive;
+  transform: rotate(-3deg);
+}
+
+.illustration {
+  width: 464px;
+  height: 416px;
+  object-fit: contain;
+}
+
+.social main {
+  width: 1280px;
+  height: 640px;
+  grid-template-columns: 550px 440px;
+  gap: 32px;
+}
+
+.social .panel {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  padding: 12px 35px 35px;
+}
+
+.social .logo {
+  width: 116px;
+  height: 116px;
+  margin-left: -12px;
+}
+
+.social .wordmark svg { width: 432px; }
+.social .wordmark svg + svg { width: 336px; }
+.social .tagline { max-width: 390px; }
+.social .illustration { width: 440px; }

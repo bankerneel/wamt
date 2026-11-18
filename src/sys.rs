@@ -1,4 +1,4 @@
-//! Switchboard's own footprint, shown on the page so its cost is visible.
+//! wamt's own footprint, shown on the page so its cost is visible.
 
 use std::time::Instant;
 

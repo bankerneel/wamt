@@ -2,7 +2,13 @@
 name = "wamt"
 version = "0.1.0"
 edition = "2021"
-description = "Who Ate My Tokens: a local live dashboard of T3 Code threads and Claude Code usage"
+description = "Who Ate My Tokens: a local, read-only token observation layer for T3 Code, Claude Code and Codex"
+license = "MIT"
+repository = "https://github.com/bankerneel/wamt"
+homepage = "https://github.com/bankerneel/wamt#readme"
+readme = "README.md"
+keywords = ["claude-code", "t3-code", "token-usage", "dashboard", "llm"]
+categories = ["development-tools", "command-line-utilities", "visualization"]
 publish = false
 
 [dependencies]

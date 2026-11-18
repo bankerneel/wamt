@@ -358,11 +358,11 @@ mod tests {
         let with_cwd = |s: String| s.replace("{\"type\":\"assistant\",", "{\"type\":\"assistant\",\"cwd\":\"/Users/x/projects/outside/\",");
         append(&f, &(with_cwd(line("t3msg", &stamp, 100)) + &with_cwd(line("cxmsg", &stamp, 50))));
         set_mtime(&f, day_start_ms(TODAY - 12, OFF) + MS_PER_HOUR);
-        let map: HashMap<String, String> = [("s2".to_string(), "HQ".to_string())].into();
+        let map: HashMap<String, String> = [("s2".to_string(), "Orchestrator".to_string())].into();
         let res = backfill(&root, None, OFF, TODAY, &HashSet::new(), &map);
         assert_eq!(res.days.len(), 1);
         let p = &res.days[0].projects;
-        assert_eq!(p["HQ"].out, 150);
+        assert_eq!(p["Orchestrator"].out, 150);
         assert!(!p.contains_key("outside"), "a T3 session uses the project title");
         // Without the T3 snapshot the same session falls back to its folder.
         let res = backfill(&root, None, OFF, TODAY, &HashSet::new(), &HashMap::new());

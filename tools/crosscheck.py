@@ -1,5 +1,5 @@
 """Independent count of one local day's Claude Code tokens, for checking
-Switchboard's numbers. Shares no code with the Rust reader.
+wamt's numbers. Shares no code with the Rust reader.
 
 Usage (inside a container with the transcripts mounted read-only):
     python3 -I crosscheck.py <projects_root> <utc_offset_minutes> <YYYY-MM-DD>

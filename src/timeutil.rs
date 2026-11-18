@@ -1,6 +1,6 @@
 //! Time helpers: RFC 3339 parsing, local calendar days, the machine's UTC offset.
 //!
-//! Everything inside Switchboard is epoch milliseconds (UTC). "Days" are local
+//! Everything inside wamt is epoch milliseconds (UTC). "Days" are local
 //! calendar days numbered from 1970-01-01, using a fixed UTC offset in minutes.
 
 use std::time::{SystemTime, UNIX_EPOCH};

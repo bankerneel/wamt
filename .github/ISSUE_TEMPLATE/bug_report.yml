@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in wamt does not work as expected
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Please do not paste real token data, thread titles or file paths. Demo mode output is fine.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can it be reproduced?
+      description: Steps to reproduce, including any query string used.
+      placeholder: |
+        1. Open /?demo
+        2. Click a thread row
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `target/release/wamt --version` or the release tag.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Which data source is involved?
+      multiple: true
+      options:
+        - T3 Code
+        - Claude Code
+        - Codex
+        - Page or UI
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: Output of `scripts/wamt logs`, with any personal paths redacted.
+      render: shell

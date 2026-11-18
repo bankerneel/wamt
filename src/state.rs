@@ -1,4 +1,4 @@
-//! The only files Switchboard writes: small JSON caches of offsets and
+//! The only files wamt writes: small JSON caches of offsets and
 //! numbers in the state directory. Written atomically (temp file + rename).
 //! Deleting them is always safe; the next start re-reads the 3-day window.
 

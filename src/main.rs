@@ -44,6 +44,9 @@ static ASSETS: &[http::Asset] = &[
     http::Asset { name: "logo.png", ctype: "image/png", bytes: include_bytes!("../ui/assets/logo.png") },
     http::Asset { name: "logo-dark.png", ctype: "image/png", bytes: include_bytes!("../ui/assets/logo-dark.png") },
     http::Asset { name: "favicon.png", ctype: "image/png", bytes: include_bytes!("../ui/assets/favicon.png") },
+    http::Asset { name: "demo/state.json", ctype: "application/json", bytes: include_bytes!("../ui/assets/demo/state.json") },
+    http::Asset { name: "demo/thread.json", ctype: "application/json", bytes: include_bytes!("../ui/assets/demo/thread.json") },
+    http::Asset { name: "demo/timeline.json", ctype: "application/json", bytes: include_bytes!("../ui/assets/demo/timeline.json") },
 ];
 
 struct Config {
