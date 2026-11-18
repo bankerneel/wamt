@@ -1,6 +1,7 @@
 //! A deliberately small HTTP/1.1 server on `std::net`.
 //!
-//! Routes: `/` (the page), `/api/state` (everything as JSON), `/api/thread`
+//! Routes: `/` (the page), `/api/state` (everything as JSON), `/api/brief`
+//! (a tiny status-line/SwiftBar summary), `/api/thread`
 //! (one thread's drill-down, built on demand), `/events`
 //! (Server-Sent Events), `/healthz`. GET and HEAD only. Requests whose Host
 //! header is not localhost are refused, which blocks DNS-rebinding pages
@@ -176,6 +177,10 @@ impl Server {
                 let (snap, _) = self.hub.snapshot();
                 let _ = respond(&mut s, "200 OK", "application/json", snap.as_bytes(), head);
             }
+            "/api/brief" => {
+                let body = crate::payload::brief(&self.shared.lock().unwrap_or_else(|e| e.into_inner()), now_ms());
+                let _ = respond(&mut s, "200 OK", "application/json", body.as_bytes(), head);
+            }
             "/api/thread" => {
                 let Some(id) = drill::id_from_query(&req.query) else {
                     let _ = respond(&mut s, "400 Bad Request", "text/plain", b"bad thread id", head);
@@ -335,6 +340,15 @@ mod tests {
         let state = get(port, "/api/state", &h);
         assert!(state.starts_with("HTTP/1.1 200"));
         assert!(state.contains("{\"live\":{\"ok\":true}"));
+        let brief = get(port, "/api/brief", &h);
+        assert!(brief.starts_with("HTTP/1.1 200"), "{brief}");
+        let body = brief.rsplit("\r\n\r\n").next().unwrap_or("");
+        let v: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(v.as_object().unwrap().len(), 5);
+        for k in ["plate_pct", "week_pct", "needs", "eating", "plate_resets_ms"] {
+            assert!(v.get(k).is_some(), "missing {k}");
+        }
+        assert!(get(port, "/api/brief", "evil.example:80").starts_with("HTTP/1.1 403"));
         assert!(get(port, "/nope", &h).starts_with("HTTP/1.1 404"));
         // Thread drill-down: bad ids are 400, a good id with no T3 data is 503.
         for bad in ["/api/thread", "/api/thread?id=", "/api/thread?id=a%2Fb", "/api/thread?id=a%20b", "/api/thread?id=..%2f..%2fetc"] {

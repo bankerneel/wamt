@@ -3,6 +3,7 @@
 
 mod agg;
 mod backfill;
+mod cclimits;
 mod codex;
 mod drill;
 mod feed;
@@ -447,8 +448,41 @@ fn merge_codex_day(into: &mut DayAgg, cx: &DayAgg) {
     }
 }
 
+/// Claude's status line writes `cc-limits.json` on every API response. Read
+/// it on the tailer's one-second tick, but only after its mtime moves; also
+/// retire windows whose reset passed between writes.
+fn poll_cc_limits(path: &PathBuf, last_mtime: &mut i64, shared: &Mutex<Shared>, hub: &Hub, now: i64) {
+    let mut changed = false;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mt = tail::mtime_ms(&meta);
+        if mt != *last_mtime {
+            *last_mtime = mt;
+            let parsed = cclimits::load(path, now);
+            let mut sh = shared.lock().unwrap();
+            if sh.cc_limits != parsed {
+                sh.cc_limits = parsed;
+                changed = true;
+            }
+        }
+    }
+    {
+        let mut sh = shared.lock().unwrap();
+        if let Some(c) = sh.cc_limits.as_mut() {
+            let before = (c.five_hour.is_some(), c.seven_day.is_some());
+            c.five_hour = c.five_hour.filter(|w| w.resets_ms > now);
+            c.seven_day = c.seven_day.filter(|w| w.resets_ms > now);
+            changed |= before != (c.five_hour.is_some(), c.seven_day.is_some());
+        }
+    }
+    if changed {
+        publish_live(shared, hub);
+    }
+}
+
 fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: Arc<Mutex<Shared>>, hub: Arc<Hub>) {
     let cache_path = state_dir.join("transcripts.json");
+    let cc_path = state_dir.join("cc-limits.json");
+    let mut cc_mtime = -1i64;
     let history_path = state_dir.join("history.json");
     let off = shared.lock().unwrap().off;
     let mut history = history::History::load(&history_path);
@@ -482,6 +516,7 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
     let mut first = true;
     loop {
         let now = now_ms();
+        poll_cc_limits(&cc_path, &mut cc_mtime, &shared, &hub, now);
         let day = day_of(now, off);
         // Transcript files are read for the whole week; session detail (names,
         // buckets, per-session lines) only for the newest three days.

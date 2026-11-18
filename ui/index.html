@@ -930,8 +930,48 @@ function renderBoard() {
 const CAL = { v: null, open: false };
 try { CAL.v = JSON.parse(localStorage.getItem("wamt-cal") || "null"); } catch (_) {}
 CAL.q = Number(new URLSearchParams(location.search).get("cal")) || 0; // screenshots only, not saved
+
+// Claude Code's status line hands us its own numbers. They take over from the
+// manual calibration while they are fresh (younger than one window).
+function ccWindow(win) {
+  const c = S.live && S.live.cc_limits;
+  if (!c || !(c.at > 0)) return null;
+  const v = c[win];
+  if (!v || !(v.pct >= 0 && v.pct <= 100) || !(v.resets_ms > now())) return null;
+  const age = now() - c.at;
+  const span = win === "five_hour" ? 5 * 3600e3 : 7 * 24 * 3600e3;
+  if (age < -60000 || age >= span) return null;
+  return { pct: v.pct, resets_ms: v.resets_ms, at: c.at };
+}
+function ccPlate() { return ccWindow("five_hour"); }
+function ccWeek() { return ccWindow("seven_day"); }
+function pctText(v) { return v < 10 ? v.toFixed(1) : String(Math.round(v)); }
+
 function plateOf(L) {
   const w = L && L.window;
+  const cc = ccPlate();
+  if (cc) {
+    // Keep this Mac's meter for the shape of the bar and the forecast, but
+    // scale its cap by real / meter so Claude's percentage is the hero.
+    const meterPct = w && w.pct > 0 ? w.pct * 100 : 0;
+    const k = meterPct > 0 ? cc.pct / meterPct : null;
+    const base = w || { active: true, start_ms: cc.resets_ms - 5 * 3600e3, end_ms: cc.resets_ms,
+      anchored: true, used: 0, by_family: [0, 0, 0, 0], observer: 0, calls: 0,
+      cap: null, rate_per_min: 0, eta_ms: null };
+    const cap = base.cap ? { ...base.cap, used: k > 0 ? base.cap.used / k : base.cap.used } : null;
+    let eta = null;
+    if (cap && cap.used > 0) {
+      const left = cap.used - base.used;
+      if (left <= 0) eta = now();
+      else if (base.rate_per_min > 0) {
+        const e = now() + (left / base.rate_per_min) * 60e3;
+        if (e < cc.resets_ms) eta = e;
+      }
+    }
+    return { ...base, active: true, cap, pct: cc.pct / 100, end_ms: cc.resets_ms, eta_ms: eta,
+      cc, estimate_pct: meterPct || null,
+      calibrated: { k, real: cc.pct, meter: Math.round(meterPct), at: cc.at, start: base.start_ms, fromCC: true } };
+  }
   if (CAL.q && !CAL.v && w && w.pct > 0) CAL.v = { k: CAL.q / (w.pct * 100), real: CAL.q, meter: Math.round(w.pct * 100), at: now(), start: w.start_ms };
   if (!w || !w.active || !w.cap || w.pct == null || !CAL.v || !(CAL.v.k > 0)) return w;
   const k = CAL.v.k, cap = { ...w.cap, used: w.cap.used / k };
@@ -943,6 +983,11 @@ function plateOf(L) {
 }
 function renderCalib() {
   const el = $("calib"), w = S.live && S.live.window;
+  const cc = ccPlate();
+  if (cc) {
+    el.innerHTML = `<span>${esc(`Claude Code reported ${pctText(cc.pct)}% at ${hhmm(cc.at)} (${dur(now() - cc.at)} old). Calibration is automatic.`)}</span>`;
+    return;
+  }
   if (!w || !w.active || !w.cap || w.pct == null) { el.innerHTML = ""; return; }
   const c = CAL.v;
   const state = c ? `Calibrated at ${hhmm(c.at)}${c.start !== w.start_ms ? " (an earlier window)" : ""}: Claude said ${c.real}% when this meter said ${c.meter}%, so the meter is scaled by ${c.k.toFixed(2)}.` : "The meter only sees this Mac.";
@@ -984,8 +1029,14 @@ function renderWindow() {
     if (cap && w.pct != null) {
       const pct = w.pct * 100;
       const scaleMax = Math.max(100, pct * 1.05);
-      h += `<div class="hero"><span class="big din num">${pct < 10 ? pct.toFixed(1) : Math.round(pct)}</span><span class="pct din">%</span><span class="note">${note(w.pct)}</span>
-        <span class="of">${w.calibrated ? "eaten, calibrated to Claude's /usage. Based on" : "eaten, measured against"} the usage that hit the limit at ${hhmm(cap.hit_ms)}${now() - cap.hit_ms > 20 * 3600e3 ? " on an earlier day" : ""}</span></div>`;
+      if (w.cc) {
+        h += `<div class="hero"><span class="big din num">${esc(pctText(w.cc.pct))}</span><span class="pct din">%</span><span class="note">${esc(note(w.pct))}</span>
+          <span class="of">from Claude Code, ${esc(hhmm(w.cc.at))} (${esc(dur(now() - w.cc.at))} old)</span></div>`;
+        if (w.estimate_pct != null) h += `<p class="fine muted">this Mac's estimate: ${esc(pctText(w.estimate_pct))}%</p>`;
+      } else {
+        h += `<div class="hero"><span class="big din num">${pct < 10 ? pct.toFixed(1) : Math.round(pct)}</span><span class="pct din">%</span><span class="note">${note(w.pct)}</span>
+          <span class="of">${w.calibrated ? "eaten, calibrated to Claude's /usage. Based on" : "eaten, measured against"} the usage that hit the limit at ${hhmm(cap.hit_ms)}${now() - cap.hit_ms > 20 * 3600e3 ? " on an earlier day" : ""}</span></div>`;
+      }
       const segs = w.by_family.map((v, i) => v > 0 ? `<i class="m${i}" style="width:${((v / cap.used) * 100 / scaleMax * 100).toFixed(2)}%;background:var(--m${i})" data-tip="<b>${FAM[i]}</b>: ${((v / cap.used) * 100).toFixed(1)}% of the cap"></i>` : "").join("");
       // Forecast: where the plate ends up at the current pace (server-side estimate).
       const minsLeft = Math.max(0, (w.end_ms - now()) / 60e3);
@@ -1006,13 +1057,20 @@ function renderWindow() {
       } else {
         h += `<p class="forecast">At this pace (${perHour < 1 ? perHour.toFixed(1) : perHour.toFixed(0)}% an hour), <b>you make it to the reset at ${hhmm(w.end_ms)}</b>, around ${Math.round(projPct)}% eaten.${tag}</p>`;
       }
+    } else if (w.cc) {
+      const pct = w.cc.pct;
+      h += `<div class="hero"><span class="big din num">${esc(pctText(pct))}</span><span class="pct din">%</span><span class="note">${esc(note(w.pct))}</span>
+        <span class="of">from Claude Code, ${esc(hhmm(w.cc.at))} (${esc(dur(now() - w.cc.at))} old)</span></div>
+        <div class="wbar"><i class="m0" style="width:${esc(Math.min(100, pct).toFixed(2))}%;background:var(--m0)"></i></div>
+        <div class="wscale"><span>0</span><span>100%</span></div>`;
+      if (w.estimate_pct != null) h += `<p class="fine muted">this Mac's estimate: ${esc(pctText(w.estimate_pct))}%</p>`;
     } else {
       h += `<div class="hero"><span class="big din num">${compact(w.calls)}</span><span class="of">requests in this window. No limit hit has been recorded yet, so there is nothing to compare against.</span></div>`;
       h += `<div class="legend">${famRow(w.by_family, used)}</div>`;
     }
     const left = w.end_ms - now();
     h += `<dl class="facts">
-      <dt>Resets</dt><dd>${hhmm(w.end_ms)}, in <span data-until="${w.end_ms}">${dur(left)}</span>${w.anchored ? ", as recorded by T3" : ""}</dd>
+      <dt>Resets</dt><dd>${esc(hhmm(w.end_ms))}, in <span data-until="${w.end_ms}">${esc(dur(left))}</span>${w.cc ? ", from Claude Code" : (w.anchored ? ", as recorded by T3" : "")}</dd>
       <dt>Opened</dt><dd>${hhmm(w.start_ms)}${w.anchored ? "" : ", estimated"}</dd>
       <dt>Requests</dt><dd class="num">${full(w.calls)}</dd>
       ${w.observer > 0 ? `<dt>Note-taker</dt><dd>${((w.observer / used) * 100).toFixed(1)}% of this window</dd>` : ""}
@@ -1285,8 +1343,48 @@ function weekUsage(start, end) {
   }
   return { used: flat + totFam, fam };
 }
+// A weekly limit hit is the only cap we can infer without a /usage reading.
+function weekHitCap() {
+  const D = S.days, hits = (D && D.week_info && D.week_info.hits) || [];
+  const hit = hits.filter((h) => h <= now()).sort((a, b) => b - a)[0];
+  if (!hit) return 0;
+  let used = 0;
+  for (const d of (D.week || [])) {
+    const cells = d.hours || [];
+    for (let h = 0; h < cells.length; h++) {
+      const hs = d.start + h * 3600e3;
+      if (hs >= hit) break;
+      if (hs >= hit - WEEK_MS) used += Number(cells[h]) || 0;
+    }
+  }
+  return used;
+}
 function weekState() {
   const D = S.days; if (!D || !D.week || !D.week.length) return null;
+  const cc = ccWeek();
+  if (cc) {
+    const reset = weekReset(cc.reset_ms), start = reset - WEEK_MS;
+    const u = weekUsage(start, reset);
+    const hitCap = weekHitCap();
+    const cap = u.used > 0 ? u.used / (cc.pct / 100) : 0;
+    const pct = cc.pct / 100;
+    const rate = u.used > 0 ? weekUsage(now() - 24 * 3600e3, now()).used / 24 : 0;
+    let forecast = "";
+    if (cap > 0 && rate > 0) {
+      const projected = u.used + rate * Math.max(0, reset - now()) / 3600e3;
+      const pd = (rate * 24 / cap) * 100, perDay = (pd < 1 ? pd.toFixed(1) : Math.round(pd)) + "%";
+      if (projected >= cap) {
+        const eta = weekWdTime(now() + (cap - u.used) / rate * 3600e3);
+        forecast = `At this pace (${esc(perDay)} of the week a day, from the last 24 hours), <b>out by ${esc(eta)}</b>.`;
+      } else {
+        forecast = `At this pace (${esc(perDay)} of the week a day, from the last 24 hours), <b>about ${esc(Math.round(projected / cap * 100))}% by the reset</b>.`;
+      }
+    } else if (cap > 0) forecast = "No usage in the last 24 hours, so no run-out in sight.";
+    return { cal: { pct: cc.pct, reset_ms: cc.reset_ms, at: cc.at, used_at_cal: u.used, fromCC: true },
+      reset, start, used: u.used, fam: u.fam, cap, pct, earlier: false, hit: null, rate, forecast,
+      total: (D.week_info && D.week_info.total_w) || 0, auto: true,
+      estimate: hitCap > 0 ? (u.used / hitCap) * 100 : null };
+  }
   if (WEEKCAL.q && !WEEKCAL.v && WEEKCAL.q.pct > 0) {
     const raw = weekParseReset(WEEKCAL.q.reset);
     const r = weekReset(raw);
@@ -1323,6 +1421,9 @@ function weekState() {
 }
 function weekCalibHtml(st) {
   const c = st && st.cal;
+  if (c && c.fromCC) {
+    return `<span>${esc(`Claude Code reported ${pctText(c.pct)}% at ${hhmm(c.at)} (${dur(now() - c.at)} old). Calibration is automatic.`)}</span>`;
+  }
   const state = c
     ? `Calibrated at ${esc(hhmm(c.at))}${st.earlier ? " (calibrated in an earlier week)" : ""}: Claude said ${esc(c.pct)}% used when this Mac had ${esc(compact(c.used_at_cal))} weighted units in the window.`
     : "The meter only sees this Mac.";
@@ -1384,17 +1485,26 @@ function weekInner(D) {
   const st = weekState();
   const plate = S.live && S.live.window && S.live.window.cap && S.live.window.cap.used > 0 ? totW / S.live.window.cap.used : 0;
   let meterHtml;
-  if (st && st.cal && st.cap > 0) {
+  if (st && st.cal && (st.cap > 0 || st.auto)) {
     const pct = st.pct * 100, scaleMax = Math.max(100, pct * 1.05);
-    const segs = st.fam.map((v, i) => (v > 0 ? `<i style="width:${((v / st.cap) * 100 / scaleMax * 100).toFixed(2)}%;background:var(--m${i})" data-tip="<b>${FAM[i]}</b>: ${esc(((v / st.cap) * 100).toFixed(1))}% of the weekly cap"></i>` : "")).join("");
-    const note = st.hit
-      ? `Cap drawn from the weekly limit hit at ${esc(hhmm(st.hit))}.`
-      : `Calibrated from Claude's /usage${st.earlier ? " in an earlier week" : ""}.`;
-    meterHtml = `<div class="wkmeter"><div class="hero"><span class="big din num">${pct < 10 ? pct.toFixed(1) : Math.round(pct)}</span><span class="pct din">%</span><span class="of">of the weekly limit; resets ${esc(weekWdTime(st.reset))}</span></div>
-      <div class="wbar">${segs}<span class="capline" style="left:calc(${(100 / scaleMax * 100).toFixed(2)}% - 1px)" data-tip="The weekly cap"></span></div>
+    const segs = st.cap > 0 ? st.fam.map((v, i) => (v > 0 ? `<i style="width:${((v / st.cap) * 100 / scaleMax * 100).toFixed(2)}%;background:var(--m${i})" data-tip="<b>${FAM[i]}</b>: ${esc(((v / st.cap) * 100).toFixed(1))}% of the weekly cap"></i>` : "")).join("") : "";
+    const note = st.auto
+      ? `From Claude Code at ${esc(hhmm(st.cal.at))}.`
+      : (st.hit
+        ? `Cap drawn from the weekly limit hit at ${esc(hhmm(st.hit))}.`
+        : `Calibrated from Claude's /usage${st.earlier ? " in an earlier week" : ""}.`);
+    const bar = st.cap > 0
+      ? `${segs}<span class="capline" style="left:calc(${(100 / scaleMax * 100).toFixed(2)}% - 1px)" data-tip="The weekly cap"></span>`
+      : `<i style="width:${esc(Math.min(100, pct).toFixed(2))}%;background:var(--m0)"></i>`;
+    const detail = st.auto && !(st.cap > 0)
+      ? `${note} No usage in this window on this Mac yet.`
+      : `${note} ${esc(compact(st.used))} weighted units this week on this Mac, cap ${esc(compact(st.cap))}. claude.ai chat and other devices are invisible here, so all figures are estimates.`;
+    meterHtml = `<div class="wkmeter"><div class="hero"><span class="big din num">${esc(pctText(pct))}</span><span class="pct din">%</span><span class="of">of the weekly limit; resets ${esc(weekWdTime(st.reset))}</span></div>
+      <div class="wbar">${bar}</div>
       <div class="wscale"><span>0</span><span>weekly cap</span></div>
-      <p class="forecast">${st.forecast}${st.forecast ? '<span class="tag">estimate</span>' : ""}</p>
-      <p class="fine">${note} ${esc(compact(st.used))} weighted units this week on this Mac, cap ${esc(compact(st.cap))}. claude.ai chat and other devices are invisible here, so all figures are estimates.</p></div>`;
+      ${st.forecast ? `<p class="forecast">${st.forecast}<span class="tag">estimate</span></p>` : ""}
+      ${st.auto && st.estimate != null ? `<p class="fine muted">this Mac's estimate: ${esc(pctText(st.estimate))}%</p>` : ""}
+      <p class="fine">${detail}</p></div>`;
   } else {
     meterHtml = `<p class="fine">Set the weekly % from /usage to see a weekly meter.</p>`;
   }

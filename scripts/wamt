@@ -2,10 +2,11 @@
 # Start, stop or check Who Ate My Tokens on this Mac.
 # Usage: scripts/wamt start | stop | restart | status | open | logs | build
 #        scripts/wamt login on | off | status   (start at login via launchd)
+#        scripts/wamt statusline on | off | status
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/target/release/wamt"
-STATE="$ROOT/.state"
+STATE=${WAMT_STATE:-$ROOT/.state}
 PIDF="$STATE/wamt.pid"
 LOG="$STATE/wamt.log"
 URL="http://127.0.0.1:7317"
@@ -100,6 +101,85 @@ case "${1:-status}" in
       *) echo "Usage: $0 login on | off | status"; exit 2 ;;
     esac
     ;;
+  statusline)
+    # Only the statusLine command is ever shown; settings.json may hold tokens.
+    SETTINGS="$HOME/.claude/settings.json"
+    BACKUP="$STATE/settings.json.bak"
+    ORIGINAL="$STATE/statusline-orig.json"
+    CMD="sh $ROOT/scripts/statusline.sh"
+    case "${2:-status}" in
+      on)
+        [ -f "$SETTINGS" ] || { echo "No settings file at ~/.claude/settings.json"; exit 1; }
+        command -v python3 >/dev/null 2>&1 || { echo "python3 is needed for this"; exit 1; }
+        mkdir -p "$STATE"
+        [ -f "$BACKUP" ] || cp "$SETTINGS" "$BACKUP"
+        python3 - "$SETTINGS" "$ORIGINAL" "$CMD" <<'PY'
+import json, os, sys
+path, orig_path, cmd = sys.argv[1:4]
+with open(path, encoding="utf-8") as f:
+    settings = json.load(f)
+if not os.path.exists(orig_path):
+    saved = settings.get("statusLine") if isinstance(settings.get("statusLine"), dict) else {"command": ""}
+    with open(orig_path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(saved, f, indent=2)
+        f.write("\n")
+    os.replace(orig_path + ".tmp", orig_path)
+line = settings.get("statusLine")
+if not isinstance(line, dict):
+    line = {"type": "command"}
+line["command"] = cmd
+settings["statusLine"] = line
+with open(path + ".tmp", "w", encoding="utf-8") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+os.replace(path + ".tmp", path)
+PY
+        echo "Status line runs WAMT: $CMD"
+        echo "Turn off: $0 statusline off"
+        ;;
+      off)
+        [ -f "$ORIGINAL" ] || { echo "No saved status line to restore"; exit 1; }
+        command -v python3 >/dev/null 2>&1 || { echo "python3 is needed for this"; exit 1; }
+        python3 - "$SETTINGS" "$ORIGINAL" <<'PY'
+import json, os, sys
+path, orig_path = sys.argv[1:3]
+with open(orig_path, encoding="utf-8") as f:
+    saved = json.load(f)
+settings = {}
+if os.path.exists(path):
+    with open(path, encoding="utf-8") as f:
+        settings = json.load(f)
+settings["statusLine"] = saved
+with open(path + ".tmp", "w", encoding="utf-8") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+os.replace(path + ".tmp", path)
+PY
+        echo "Original status line restored."
+        ;;
+      status)
+        cmd=
+        if [ -f "$SETTINGS" ]; then
+          cmd=$(python3 - "$SETTINGS" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        line = json.load(f).get("statusLine") or {}
+    print(line.get("command", "") if isinstance(line, dict) else "")
+except Exception:
+    pass
+PY
+          )
+        fi
+        if [ "$cmd" = "$CMD" ]; then
+          echo "Active: $CMD"
+        else
+          echo "Inactive (statusLine command: ${cmd:-none})"
+        fi
+        ;;
+      *) echo "Usage: $0 statusline on | off | status"; exit 2 ;;
+    esac
+    ;;
   status)
     if running; then
       pid="$(pid)"
@@ -116,6 +196,6 @@ case "${1:-status}" in
     tail -n 40 "$LOG"
     ;;
   *)
-    echo "Usage: $0 start | stop | restart | status | open | logs | build | login on|off|status"; exit 2
+    echo "Usage: $0 start | stop | restart | status | open | logs | build | login on|off|status | statusline on|off|status"; exit 2
     ;;
 esac
