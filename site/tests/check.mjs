@@ -28,7 +28,6 @@ const THEMES = ['light', 'dark'];
 const POINTS = ['hero', 'mid-bite', 'evidence', 'suspects', 'case-notes', 'install'];
 const HERO = '[data-scene="hero"]';
 const HERO_BLOBS = HERO + ' :is([data-sprite="coral"], [data-sprite="lilac"], [data-sprite="blue"])';
-const SECTION_SHOT = { style: '.site-header, .skip-link { visibility: hidden !important; }' };
 
 function parseArgs(argv) {
   const out = { _flags: new Set() };
@@ -158,6 +157,7 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
   '.webp': 'image/webp',
   '.avif': 'image/avif',
   '.woff2': 'font/woff2',
@@ -239,6 +239,22 @@ async function scrollToSelector(page, selector) {
     if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', behavior: 'instant' });
   }, selector);
   await settle(page);
+}
+
+async function sectionScreenshot(page, section, file) {
+  const navigation = page.locator('.site-header, .skip-link');
+  const previous = await navigation.evaluateAll(nodes => nodes.map(node => {
+    const visibility = node.style.visibility;
+    node.style.visibility = 'hidden';
+    return visibility;
+  }));
+  try {
+    await section.screenshot({ path: file });
+  } finally {
+    await navigation.evaluateAll((nodes, values) => {
+      nodes.forEach((node, i) => { node.style.visibility = values[i]; });
+    }, previous);
+  }
 }
 
 async function heroFrames(page) {
@@ -516,14 +532,14 @@ async function main() {
                   for (const image of images) image.loading = 'eager';
                   await Promise.all(images.map((image) => image.decode()));
                 });
-                await el.screenshot({ path: file, ...SECTION_SHOT });
+                await sectionScreenshot(page, page.locator('#evidence'), file);
               }
               else {
                 await page.screenshot({ path: file });
                 notes.push('missing #evidence, used viewport capture for ' + name);
               }
             } else if (['install', 'suspects', 'case-notes'].includes(point)) {
-              await page.locator('#' + point).screenshot({ path: file, ...SECTION_SHOT });
+              await sectionScreenshot(page, page.locator('#' + point), file);
             } else {
               await page.screenshot({ path: file });
             }
@@ -551,7 +567,7 @@ async function main() {
         await goto(page, url);
         await scrollToSelector(page, '#install');
         const file = path.join(OUT_DIR, '390-dark-reduced-finale.png');
-        await page.locator('#install').screenshot({ path: file, ...SECTION_SHOT });
+        await sectionScreenshot(page, page.locator('#install'), file);
         screenshots.push(file);
       } finally {
         await ctx.close();
@@ -682,6 +698,9 @@ async function main() {
       const sitemap = await fetch(origin + '/sitemap.xml');
       assert.ok(sitemap.ok);
       assert.ok((await sitemap.text()).includes('<loc>' + canonical + '</loc>'));
+      const socialImage = new URL(await page.locator('meta[property="og:image"]').getAttribute('content'));
+      const image = await fetch(origin + socialImage.pathname);
+      assert.equal(image.headers.get('content-type'), 'image/jpeg');
       await page.close();
       return 'three steps, three alibis, SoftwareSourceCode and canonical sitemap';
     });
@@ -824,11 +843,9 @@ async function main() {
       const midY = await findMidScroll(page);
       await scrollY(page, midY);
       const atMid = await read();
-      await page.waitForFunction(() => {
-        const canvas = document.querySelector('[data-scene="stage"] canvas');
-        return canvas && canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height)
-          .data.some((alpha, i) => i % 4 === 3 && alpha > 0);
-      });
+      const canvas = page.locator('[data-scene="stage"] canvas[data-crumbs-painted]');
+      assert.ok(await canvas.evaluate(el => el.getContext('2d').getImageData(0, 0, el.width, el.height)
+        .data.some((alpha, i) => i % 4 === 3 && alpha > 0)), 'direct scroll to a bite should paint crumbs');
       await scrollToSelector(page, '#install');
       const atInstall = await read();
       await scrollY(page, midY);

@@ -155,7 +155,7 @@
       if (area > bestArea) { bestArea = area; best = hosts[i]; }
     }
     if (!best) best = hosts[0];
-    if (best === active) return;
+    if (best === active) { requestPaint(); return; }
     active = best;
     if (canvas.parentNode !== active) {
       if (canvas.parentNode) canvas.parentNode.removeAttribute('data-crumbs-host');

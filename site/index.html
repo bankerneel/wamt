@@ -10,14 +10,15 @@
 <meta property="og:url" content="https://whoatemytokens.neelbanker.com/">
 <meta property="og:title" content="Who Ate My Tokens? Your agents, caught snacking live">
 <meta property="og:description" content="A local, read-only token observation layer for T3 Code, Claude Code and Codex. One Rust binary, one page, and nothing leaves your machine.">
-<meta property="og:image" content="https://whoatemytokens.neelbanker.com/img/social-preview.png">
+<meta property="og:image" content="https://whoatemytokens.neelbanker.com/img/social-preview.jpg">
+<meta property="og:image:type" content="image/jpeg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Who Ate My Tokens? Token observation layer for T3 Code, Claude Code and Codex">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Who Ate My Tokens? Your agents, caught snacking live">
 <meta name="twitter:description" content="A local, read-only token observation layer for T3 Code, Claude Code and Codex. One Rust binary, one page, and nothing leaves your machine.">
-<meta name="twitter:image" content="https://whoatemytokens.neelbanker.com/img/social-preview.png">
+<meta name="twitter:image" content="https://whoatemytokens.neelbanker.com/img/social-preview.jpg">
 <meta name="twitter:image:alt" content="Who Ate My Tokens? Token observation layer for T3 Code, Claude Code and Codex">
 <script type="application/ld+json">
 {
@@ -302,6 +303,7 @@
             <div class="suspect-frame"><div class="sprite" data-sprite="coral" aria-hidden="true"></div></div>
             <h3 class="suspect-name">T3 Code</h3>
             <p class="suspect-note">threads and subagents</p>
+            <p class="suspect-alibi">Read-only SQLite state.</p>
           </div>
         </li>
         <li class="suspect" tabindex="0" data-suspect="lilac">
@@ -310,6 +312,7 @@
             <div class="suspect-frame"><div class="sprite" data-sprite="lilac" aria-hidden="true"></div></div>
             <h3 class="suspect-name">Claude Code</h3>
             <p class="suspect-note">sessions and limits</p>
+            <p class="suspect-alibi">Transcripts in <code>~/.claude<wbr>/projects</code>.</p>
           </div>
         </li>
         <li class="suspect" tabindex="0" data-suspect="blue">
@@ -318,9 +321,33 @@
             <div class="suspect-frame"><div class="sprite" data-sprite="blue" aria-hidden="true"></div></div>
             <h3 class="suspect-name">Codex</h3>
             <p class="suspect-note">sessions and its own line</p>
+            <p class="suspect-alibi">Session files in <code>~/.codex<wbr>/sessions</code>.</p>
           </div>
         </li>
       </ul>
+    </div>
+  </section>
+
+  <section data-reveal class="how-band" id="case-notes" aria-labelledby="h-how">
+    <div class="page-wrap">
+      <h2 class="band-title" id="h-how">Case notes: how it works</h2>
+      <div class="how-machine">
+        <span class="how-boundary">This machine</span>
+        <ol class="how-flow">
+          <li class="how-step">
+            <h3>Sources</h3>
+            <p>Read-only metadata from T3 Code, Claude Code and Codex.</p>
+          </li>
+          <li class="how-step">
+            <h3>One Rust binary</h3>
+            <p>Turns local activity into token totals, limits and history.</p>
+          </li>
+          <li class="how-step">
+            <h3>Your browser</h3>
+            <p>Open the dashboard at <code>127.0.0.1</code>. No outside requests.</p>
+          </li>
+        </ol>
+      </div>
     </div>
   </section>
 
