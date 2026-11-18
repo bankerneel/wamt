@@ -50,6 +50,14 @@ changes the cache format reads the last 7 days once (about 6 s).
   date, output tokens, requests and API-equivalent dollars. "Copy yesterday"
   and "Copy today" copy a plain-text standup; "Download CSV" saves every day
   available, up to 30.
+- **Who ate when**: one day as horizontal lanes, one per T3 thread that ran
+  that day (nested under its parent) and one per Claude Code session outside
+  T3, with Today / Yesterday / day tabs. T3 runs are bars coloured by status
+  with the model family as a top stripe, hatched waits where T3 records them,
+  and 10-minute activity ticks for outside sessions on today (a first-to-last
+  span on earlier days). A 00:00 to 24:00 axis, a "now" line for today and a
+  busy-at-once strip on top show how many lanes were active at once. Click a
+  thread lane for its runs on that day.
 - **The bill**: tokens by model and by thread; "API prices" shows what they
   would cost at API list prices (an estimate; the plan is not billed this way).
 - **Diet tips**: a Today and Yesterday tab of where tokens could be saved,

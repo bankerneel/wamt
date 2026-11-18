@@ -331,6 +331,48 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .state { font-size: 11px; font-weight: 700; color: var(--muted); }
 .state.merged { color: var(--good); } .state.open { color: var(--ink-soft); }
 
+/* Who ate when: one day as horizontal lanes, one per thread or session. */
+.when #when { margin-top: 8px; }
+.when-scroll { overflow-x: auto; overflow-y: hidden; margin-top: 12px; padding-bottom: 6px; scrollbar-width: thin; }
+.when-inner { min-width: 860px; position: relative; }
+.when-row { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 8px; align-items: center; }
+.when-row > :first-child { position: sticky; left: 0; z-index: 3; background: var(--panel); }
+.when-peak { margin-bottom: 2px; }
+.when-peak .p-label { font-size: 11px; color: var(--muted); text-align: right; line-height: 1.2; }
+.when-peak .p-label .big { display: block; font-size: 20px; font-weight: 900; color: var(--ink); }
+.when-peak .p-bars { position: relative; display: flex; align-items: flex-end; height: 26px; border-bottom: 2px solid var(--border); }
+.when-peak .p-bars i.f { flex: 1 1 0; min-width: 1px; background: var(--c2); border-top: 1.5px solid var(--border); }
+.when-axis { margin-top: 8px; }
+.when-axis .a-label { font-size: 11px; color: var(--muted); text-align: right; }
+.when-axis .a-ticks { position: relative; height: 16px; border-bottom: 2px solid var(--border); }
+.when-axis .a-ticks span { position: absolute; top: 0; font-size: 10px; color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
+.when-axis .a-ticks span:first-child { transform: none; }
+.when-axis .a-ticks span:last-child { transform: translateX(-100%); }
+.when-lane { min-height: 28px; border-bottom: 1px dashed var(--rule); cursor: default; }
+.when-lane[data-thread] { cursor: pointer; }
+.when-lane[data-thread]:hover { background: var(--panel-2); }
+.when-lane[data-thread]:hover .nm { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 2px; }
+.when-lane .lbl { min-width: 0; display: flex; align-items: center; gap: 4px; font-size: 12px; }
+.when-lane .branch { flex: none; color: var(--muted); font-weight: 800; }
+.when-lane .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 650; }
+.when-lane .kindtag { flex: none; font-size: 9px; color: var(--muted); border: 1px solid var(--rule); border-radius: 2px; padding: 0 3px; }
+.when-lane .track { position: relative; height: 24px; background-image: linear-gradient(to right, var(--rule) 1px, transparent 1px); background-size: calc(100% / 24) 100%; }
+.when-lane .bar { position: absolute; top: 6px; height: 12px; border: 1.5px solid var(--border); border-radius: 2px; overflow: hidden; }
+.when-lane .bar .stripe { position: absolute; left: 0; right: 0; top: 0; height: 3px; }
+.when-lane .bar.st-completed { background: var(--c4); }
+.when-lane .bar.st-failed, .when-lane .bar.st-interrupted, .when-lane .bar.st-cancelled { background: var(--c1); }
+.when-lane .bar.st-running { background: var(--lamp-on); }
+.when-lane .bar.st-waiting { background: var(--c2); }
+.when-lane .bar.st-other { background: var(--c3); }
+.when-lane .wait { position: absolute; top: 6px; height: 12px; border: 1px dashed var(--border); border-radius: 2px; background: repeating-linear-gradient(45deg, transparent 0 3px, var(--ink-soft) 3px 4px); opacity: .55; }
+.when-lane .tick { position: absolute; top: 6px; height: 12px; width: 4px; background: var(--m1); border: 1px solid var(--border); border-radius: 1px; }
+.when-lane .span { position: absolute; top: 10px; height: 5px; background: var(--m2); border: 1px solid var(--border); border-radius: 2px; }
+.when-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--need); z-index: 2; pointer-events: none; }
+.when-peak .when-now::before { content: "now"; position: absolute; top: -13px; left: 3px; font-size: 9px; font-weight: 800; color: var(--need); }
+.when-foot { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+.when-empty { font-family: "Caveat", cursive; font-size: 21px; color: var(--muted); padding: 12px 2px; margin: 0; }
+@media (max-width: 760px) { .when-inner { min-width: 720px; } }
+
 /* The bill */
 .billctl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .tabs { display: inline-flex; border: 2px solid var(--border); border-radius: 2px; overflow: hidden; box-shadow: 3px 3px 0 var(--shadow); }
@@ -493,6 +535,11 @@ footer b { font-weight: 800; }
     <div id="days"></div>
   </section>
 
+  <section class="plate when" aria-labelledby="h-when">
+    <div class="chart-head"><h2 class="ticket t-butter" id="h-when">Who ate when</h2><div class="tabs" role="tablist" id="whenTabs"></div></div>
+    <div class="when-scroll"><div class="when-inner" id="when"></div></div>
+  </section>
+
   <section class="plate diet" aria-labelledby="h-diet">
     <div class="chart-head"><h2 class="ticket t-rose" id="h-diet">Diet tips</h2><div class="tabs" role="tablist" id="dietTabs"></div></div>
     <div id="diet"></div>
@@ -517,7 +564,7 @@ footer b { font-weight: 800; }
 "use strict";
 // ------------------------------------------------------------------ state
 const S = { live: null, days: null, feed: new Map(), skew: 0, connected: false, lastMsg: 0,
-            feedFilter: "all", ledgerDay: 0, dietDay: 0, rawDays: "", sparkKey: "", fresh: new Set() };
+            feedFilter: "all", ledgerDay: 0, dietDay: 0, whenDay: 0, rawDays: "", sparkKey: "", fresh: new Set() };
 const $ = (id) => document.getElementById(id);
 const now = () => Date.now() + S.skew;
 
@@ -1692,6 +1739,118 @@ function renderLedger() {
   $("ledger").innerHTML = h;
 }
 
+// ------------------------------------------------------------------ who ate when
+// A day as lanes, fetched on demand from /api/timeline. One lane per T3 thread
+// that ran that day, nested under its parent, plus outside Claude sessions.
+const WHEN = { seq: 0, day: null };
+
+function whenTabs() {
+  const D = S.days; if (!D || !D.days) return;
+  const names = ["Today", "Yesterday"];
+  const tabs = $("whenTabs");
+  tabs.innerHTML = D.days.map((d, i) => `<button type="button" role="tab" aria-selected="${i === S.whenDay}" data-i="${i}">${esc(names[i] || dayParts(d.day).wd)}</button>`).join("");
+  tabs.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { S.whenDay = Number(b.dataset.i); loadWhen(); }));
+}
+
+function loadWhen(dayOverride) {
+  const D = S.days; if (!D || !D.days) return;
+  if (dayOverride) {
+    const i = D.days.findIndex((d) => d.day === dayOverride);
+    if (i >= 0) S.whenDay = i;
+  }
+  const day = dayOverride || (D.days[S.whenDay] || D.days[0]).day;
+  WHEN.day = day;
+  whenTabs();
+  const box = $("when");
+  box.innerHTML = '<p class="muted">Reading that day.</p>';
+  const seq = ++WHEN.seq;
+  fetch("/api/timeline?day=" + encodeURIComponent(day)).then((r) => {
+    if (!r.ok) throw new Error("That day could not be read (" + r.status + ").");
+    return r.json();
+  }).then((t) => { if (seq === WHEN.seq) box.innerHTML = whenHtml(t); })
+    .catch((e) => { if (seq === WHEN.seq) box.innerHTML = `<p class="muted">${esc(e.message)}</p>`; });
+}
+
+function whenHtml(t) {
+  const span = t.day_end - t.day_start;
+  const pc = (ms) => Math.max(0, Math.min(100, ((ms - t.day_start) / span) * 100));
+  const pos = (a, b) => { const l = pc(a); return { l, w: Math.max(0.35, Math.min(100 - l, ((b - a) / span) * 100)) }; };
+  const slotTime = (s) => String(Math.floor(s / 6)).padStart(2, "0") + ":" + String((s % 6) * 10).padStart(2, "0");
+  // The payload carries the local UTC offset, so this section does not depend
+  // on the live board having arrived.
+  const whhmm = (ms) => { const d = new Date(ms + t.off * 60000); return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); };
+  const nowLine = t.is_today ? `<i class="when-now" style="left:${pc(t.now).toFixed(3)}%"></i>` : "";
+  if (!t.lanes.length) {
+    return `<p class="when-empty">Nothing ran on ${esc(t.day)}.</p>` +
+      (t.sessions_available ? "" : '<p class="fine">Per-session detail is kept for the last three days only.</p>');
+  }
+
+  // How many lanes had something happening in each 10-minute slot.
+  const mx = t.peak_max || 1;
+  let peakBars = "";
+  for (let i = 0; i < t.peak.length; i++) {
+    const v = t.peak[i];
+    const h = v ? Math.max(10, (v / mx) * 100) : 0;
+    const tip = `<b>${slotTime(i)}</b><br>${v} lane${v === 1 ? "" : "s"} at once`;
+    peakBars += `<i class="f" style="height:${h.toFixed(0)}%" data-tip="${esc(tip)}"></i>`;
+  }
+  let h = `<div class="when-row when-peak"><div class="p-label">busiest<br><b class="big num">${esc(t.peak_max)}</b> at once</div><div class="p-bars">${peakBars}${nowLine}</div></div>`;
+
+  let ticks = "";
+  for (let hr = 0; hr <= 24; hr += 3) ticks += `<span style="left:${(hr / 24 * 100).toFixed(3)}%">${String(hr).padStart(2, "0")}:00</span>`;
+  h += `<div class="when-row when-axis"><div class="a-label">local time</div><div class="a-ticks">${ticks}</div></div>`;
+
+  // Nest each lane under its parent when that parent also has a lane.
+  const byId = new Map(t.lanes.map((l) => [l.id, l]));
+  const depthOf = (l) => {
+    let d = 0, p = l.parent, seen = new Set([l.id]);
+    while (p && byId.has(p) && !seen.has(p) && d < 8) { seen.add(p); d++; p = byId.get(p).parent; }
+    return d;
+  };
+
+  for (const l of t.lanes) {
+    const d = depthOf(l);
+    const branch = d ? '<span class="branch" aria-hidden="true">&#8627;</span>' : "";
+    const click = l.kind === "t3"
+      ? ` data-thread="${esc(l.id)}" data-day="${esc(t.day)}" tabindex="0" title="Open this thread's day"`
+      : ' title="Claude Code session outside T3"';
+    const tag = l.kind === "t3" ? "" : '<span class="kindtag">CLI</span>';
+    let segs = "";
+    if (l.kind === "t3") {
+      for (const r of l.runs) {
+        const p = pos(r.at, r.to);
+        const tip = `<b>${esc(l.title)}</b><br>run ${esc(r.n)}<br>${whhmm(r.at)} to ${whhmm(r.to)}<br>length ${dur(r.to - r.at)}<br>status: ${esc(r.status)}<br>model: ${esc(modelName(r.model))}`;
+        const st = ["completed", "failed", "interrupted", "cancelled", "running", "waiting"].includes(r.status) ? esc(r.status) : "other";
+        segs += `<i class="bar st-${st}" style="left:${p.l.toFixed(3)}%;width:${p.w.toFixed(3)}%" data-tip="${esc(tip)}"><i class="stripe" style="background:var(--m${esc(r.fam)})"></i></i>`;
+      }
+      for (const w of l.waits) {
+        const p = pos(w.at, w.to);
+        const tip = `<b>${esc(l.title)}</b><br>waiting on you<br>${whhmm(w.at)} to ${whhmm(w.to)}<br>${dur(w.to - w.at)}<br>${esc(w.kind)} request`;
+        segs += `<i class="wait" style="left:${p.l.toFixed(3)}%;width:${p.w.toFixed(3)}%" data-tip="${esc(tip)}"></i>`;
+      }
+    } else if (t.is_today) {
+      for (const slot of l.ticks) {
+        const tip = `<b>${esc(l.title)}</b><br>active ${slotTime(slot)} to ${slotTime(slot + 1)}`;
+        segs += `<i class="tick" style="left:${(slot / t.slots * 100).toFixed(3)}%" data-tip="${esc(tip)}"></i>`;
+      }
+    } else {
+      const p = pos(l.span[0], l.span[1]);
+      const tip = `<b>${esc(l.title)}</b><br>active ${whhmm(l.span[0])} to ${whhmm(l.span[1])}`;
+      segs += `<i class="span" style="left:${p.l.toFixed(3)}%;width:${p.w.toFixed(3)}%" data-tip="${esc(tip)}"></i>`;
+    }
+    if (t.is_today) segs += `<i class="when-now" style="left:${pc(t.now).toFixed(3)}%"></i>`;
+    const indent = d ? ` style="padding-left:${Math.min(d, 8) * 12}px"` : "";
+    h += `<div class="when-row when-lane"${click}><div class="lbl"${indent}>${branch}<span class="nm">${esc(l.title)}</span>${tag}</div><div class="track">${segs}</div></div>`;
+  }
+
+  const notes = [];
+  if (!t.wait_available) notes.push("T3 recorded no waits on this day, so there are no hatched segments.");
+  if (!t.sessions_available) notes.push("Per-session detail is kept for the last three days only.");
+  if (t.omitted) notes.push(`${t.omitted} quieter lane${t.omitted === 1 ? "" : "s"} left out to keep this small.`);
+  h += `<div class="when-foot">${notes.map(esc).join(" ")} Click a thread lane for its runs on that day.</div>`;
+  return h;
+}
+
 // ------------------------------------------------------------------ footer
 function renderFoot() {
   const L = S.live; if (!L) return;
@@ -2043,7 +2202,7 @@ function onFeed(items, fresh) {
 function connect() {
   const params = new URLSearchParams(location.search);
   if (params.has("snapshot")) {
-    fetch("/api/state").then((r) => r.json()).then((s) => { S.connected = true; onLive(s.live); onDays(JSON.stringify(s.days)); onFeed(s.feed, false); if (params.get("thread")) openDrill(params.get("thread"), null, params.get("day")); });
+    fetch("/api/state").then((r) => r.json()).then((s) => { S.connected = true; onLive(s.live); onDays(JSON.stringify(s.days)); onFeed(s.feed, false); loadWhen(params.get("timeline")); if (params.get("thread")) openDrill(params.get("thread"), null, params.get("day")); });
     return;
   }
   const es = new EventSource("/events");
@@ -2052,7 +2211,7 @@ function connect() {
     const s = JSON.parse(e.data);
     S.feed.clear(); $("feed").innerHTML = ""; S.feedReady = false;
     // Live first: it carries the time zone every other panel formats with.
-    onLive(s.live); onDays(JSON.stringify(s.days)); onFeed(s.feed, false);
+    onLive(s.live); onDays(JSON.stringify(s.days)); onFeed(s.feed, false); loadWhen();
   });
   es.addEventListener("live", (e) => { S.connected = true; onLive(JSON.parse(e.data)); });
   es.addEventListener("days", (e) => onDays(e.data));
