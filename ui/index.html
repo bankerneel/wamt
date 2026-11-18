@@ -140,7 +140,7 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 
 /* Board */
 .board-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.filter { font: inherit; font-size: 13px; padding: 5px 9px; width: 220px; max-width: 100%; border: 2px solid var(--border); border-radius: 2px; background: var(--panel); color: var(--ink); box-shadow: 3px 3px 0 var(--shadow); }
+.filter { font: inherit; font-size: 13px; padding: 5px 9px; width: 220px; max-width: 100%; margin: -38px 6px 0 0; border: 2px solid var(--border); border-radius: 2px; background: var(--panel); color: var(--ink); box-shadow: 3px 3px 0 var(--shadow); }
 .board-head, .row { display: grid; grid-template-columns: 14px minmax(200px, 1fr) 150px 170px 96px 84px 54px; gap: 10px; align-items: center; }
 .board-head { font-size: 11px; font-weight: 800; color: var(--muted); padding: 0 6px 8px; border-bottom: 2px solid var(--border); }
 .board-head span:nth-child(6), .board-head span:nth-child(7), .row .tok, .row .ago { text-align: right; }
@@ -159,10 +159,11 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .t { font-weight: 650; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row.depth0 .t { font-weight: 850; }
 .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.model { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; }
-.chip { display: inline-block; font-size: 12px; font-weight: 750; color: var(--chip-ink); padding: 2px 7px 1px; border: 1.5px solid var(--border); border-radius: 2px; white-space: nowrap; line-height: 1.35; }
+.model { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; font-size: 12px; }
+.chip { display: inline-block; vertical-align: middle; max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 750; color: var(--chip-ink); padding: 2px 7px 1px; border: 1.5px solid var(--border); border-radius: 2px; white-space: nowrap; line-height: 1.35; }
 .chip.c0 { background: var(--c0); } .chip.c1 { background: var(--c1); } .chip.c2 { background: var(--c2); } .chip.c3 { background: var(--c3); } .chip.c4 { background: var(--c4); }
-.model .eff { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.model .chip { min-width: 0; flex: 0 1 auto; }
+.model .eff { color: var(--muted); font-size: 12px; white-space: nowrap; flex: none; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1.5px solid var(--border); margin-right: 6px; vertical-align: -1px; }
 .sw.m0 { background: var(--m0); } .sw.m1 { background: var(--m1); } .sw.m2 { background: var(--m2); } .sw.m3 { background: var(--m3); } .sw.m4 { background: var(--m4); }
 .now { font-size: 13px; min-width: 0; }
@@ -372,6 +373,7 @@ footer b { font-weight: 800; }
   .chassis { padding: 10px 12px 22px; gap: 30px; }
   .side { grid-template-columns: minmax(0, 1fr); }
   /* On a phone, keep what each line is doing; drop context, totals, last. */
+  .board-top .filter { margin: 8px 6px 8px 0; width: calc(100% - 6px); }
   .board-head, .row { grid-template-columns: 12px minmax(0, 1fr) 84px 92px; }
   .board-head span:nth-child(5), .board-head span:nth-child(6), .board-head span:nth-child(7),
   .row .ctx, .row .tok, .row .ago, .row .model .eff { display: none; }
@@ -521,7 +523,7 @@ function modelName(m) {
 const sw = (fam) => `<i class="sw m${fam}" aria-hidden="true"></i>`;
 // A model as a sticker chip: the site's pastel fill, ink text.
 const COLD_TIP = "A request that rebuilt more than 50K tokens of cache because the cache had expired (over 5 min idle, or 60 min for 1-hour caching).";
-const chip = (model) => `<span class="chip c${family(model)}">${esc(modelName(model))}</span>`;
+const chip = (model) => `<span class="chip c${family(model)}" title="${esc(model)}">${esc(modelName(model))}</span>`;
 
 // The wordmark, drawn in chunky pixels like the `clean` banner: a 5x7 grid
 // per letter, filled with a vertical gradient, with a hard ink shadow.
