@@ -277,7 +277,20 @@ h3 { font-family: "Caveat", cursive; font-weight: 700; font-size: 22px; line-hei
 .wcol.zero .wnum, .wcol.zero .wcx { color: var(--muted); font-weight: 500; }
 .weekbox .wbar { margin-top: 18px; }
 .weekbox .fine { margin-top: 8px; }
-@media (max-width: 760px) { .weekbox { padding: 10px 10px 8px; } .weekcols { gap: 4px; } .wcol .wnum { font-size: 11px; } .wcol .wcx { font-size: 9.5px; } }
+.weekbox .wkmeter { margin-top: 14px; padding-top: 10px; border-top: 2px solid var(--border); }
+.weekbox .hero { display: flex; align-items: baseline; gap: 2px 8px; flex-wrap: wrap; }
+.weekbox .hero .big { font-size: 44px; font-weight: 900; letter-spacing: -.05em; line-height: .9; }
+.weekbox .hero .pct { font-size: 22px; font-weight: 900; }
+.weekbox .hero .of { font-size: 12px; color: var(--ink-soft); flex-basis: 100%; margin-top: 4px; }
+.weekbox .wbar { margin: 12px 0 6px; }
+.weekbox .forecast { margin-top: 10px; font-size: 12px; }
+.wcal { margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.wcal button.linkish { background: none; border: 0; padding: 0; color: var(--accent-ink); font-weight: 700; cursor: pointer; text-decoration: underline dotted; font-size: 12px; }
+.wcal input { font: inherit; font-weight: 700; padding: 3px 6px; border: 2px solid var(--border); border-radius: 2px; background: var(--panel); color: var(--ink); }
+.wcal input[type="number"] { width: 58px; }
+.wcal input[type="datetime-local"] { width: 180px; max-width: 100%; }
+.wcal .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+@media (max-width: 760px) { .weekbox { padding: 10px 10px 8px; } .weekcols { gap: 4px; } .wcol .wnum { font-size: 11px; } .wcol .wcx { font-size: 9.5px; } .weekbox .hero .big { font-size: 36px; } .wcal input[type="datetime-local"] { width: 156px; } }
 .dcols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; margin-top: 6px; }
 .daynone { font-family: "Caveat", cursive; font-size: 21px; color: var(--muted); margin: 4px 0; }
 .cmp { font-size: 12px; color: var(--ink-soft); }
@@ -1201,10 +1214,135 @@ function dedupePrs(days) {
   return [...m.values()].sort((a, b) => b.linked - a.linked);
 }
 
+// ------------------------------------------------------------- weekly meter
+// Claude's weekly limit resets at a fixed time, not a rolling 7 days. The
+// dashboard only sees this Mac, so the % from /usage anchors the cap. Browser
+// only: nothing is sent to the server.
+const WEEK_MS = 7 * 24 * 3600e3;
+const WEEKCAL = { v: null, open: false, q: null };
+try { WEEKCAL.v = JSON.parse(localStorage.getItem("wamt-week") || "null"); } catch (_) {}
+{
+  const q = new URLSearchParams(location.search).get("week"); // screenshots only, not saved
+  if (q) { const [p, r] = q.split(","); WEEKCAL.q = { pct: Number(p), reset: r }; }
+}
+function weekParseReset(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(s || "");
+  if (!m) return 0;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) - off() * 60000;
+}
+function weekInputTime(ms) {
+  const d = local(ms), p = (n) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+function weekReset(ms) {
+  if (!(ms > 0)) return 0;
+  let r = ms;
+  for (let i = 0; i < 100000 && r < now(); i++) r += WEEK_MS; // the reset recurs weekly
+  return r;
+}
+function weekWdTime(ms) { const d = local(ms); return `${WEEK[d.getUTCDay()]} ${hhmm(ms)}`; }
+// Weighted usage in [start, end) from the hourly cells, oldest day first. A
+// partial day is counted by whole hours at or after the window start.
+function weekUsage(start, end) {
+  const W = S.days && S.days.week;
+  if (!W || !W.length || !(end > start)) return { used: 0, fam: [0, 0, 0, 0] };
+  const fam = [0, 0, 0, 0];
+  let flat = 0, totFam = 0;
+  for (const d of W) {
+    const cells = d.hours || [];
+    for (let h = 0; h < cells.length; h++) {
+      const hs = d.start + h * 3600e3;
+      if (hs < start || hs >= end) continue;
+      const cell = cells[h];
+      if (Array.isArray(cell)) {
+        cell.forEach((v, i) => { fam[i] += Number(v) || 0; });
+        totFam += cell.reduce((a, b) => a + (Number(b) || 0), 0);
+      } else flat += Number(cell) || 0;
+    }
+  }
+  if (flat > 0) {
+    // Days 4 to 7 keep one hourly number, so split it by the week's mix.
+    const wf = [0, 0, 0, 0];
+    W.forEach((d) => (d.fam || []).forEach((v, i) => { wf[i] += Number(v) || 0; }));
+    const sum = wf.reduce((a, b) => a + b, 0);
+    wf.forEach((v, i) => { fam[i] += sum > 0 ? (flat * v / sum) : (i === 0 ? flat : 0); });
+  }
+  return { used: flat + totFam, fam };
+}
+function weekState() {
+  const D = S.days; if (!D || !D.week || !D.week.length) return null;
+  if (WEEKCAL.q && !WEEKCAL.v && WEEKCAL.q.pct > 0) {
+    const raw = weekParseReset(WEEKCAL.q.reset);
+    const r = weekReset(raw);
+    if (r > 0) WEEKCAL.v = { pct: WEEKCAL.q.pct, reset_ms: r, at: now(), used_at_cal: weekUsage(r - WEEK_MS, r).used };
+  }
+  const c = WEEKCAL.v;
+  const total = (D.week_info && D.week_info.total_w) || 0;
+  if (!c || !(c.pct > 0) || !(c.reset_ms > 0)) return { cal: null, total };
+  const reset = weekReset(c.reset_ms), start = reset - WEEK_MS;
+  const u = weekUsage(start, reset);
+  const earlier = c.reset_ms - WEEK_MS !== start;
+  let cap = c.used_at_cal > 0 ? c.used_at_cal / (c.pct / 100) : 0;
+  let hit = null;
+  const hits = (D.week_info && D.week_info.hits) || [];
+  const inWin = hits.filter((h) => h >= start && h < reset).sort((a, b) => b - a)[0];
+  if (inWin) {
+    const hcap = weekUsage(start, inWin).used;
+    if (hcap > 0) { cap = hcap; hit = inWin; }
+  }
+  const pct = cap > 0 ? u.used / cap : 0;
+  const rate = weekUsage(now() - 24 * 3600e3, now()).used / 24; // weighted units per hour
+  let forecast = "";
+  if (cap > 0 && rate > 0) {
+    const projected = u.used + rate * Math.max(0, reset - now()) / 3600e3;
+    const pd = (rate * 24 / cap) * 100, perDay = (pd < 1 ? pd.toFixed(1) : Math.round(pd)) + "%";
+    if (projected >= cap) {
+      const eta = weekWdTime(now() + (cap - u.used) / rate * 3600e3);
+      forecast = `At this pace (${perDay} of the week a day, from the last 24 hours), <b>out by ${esc(eta)}</b>.`;
+    } else {
+      forecast = `At this pace (${perDay} of the week a day, from the last 24 hours), <b>about ${Math.round(projected / cap * 100)}% by the reset</b>.`;
+    }
+  } else if (cap > 0) forecast = "No usage in the last 24 hours, so no run-out in sight.";
+  return { cal: c, reset, start, used: u.used, fam: u.fam, cap, pct, earlier, hit, rate, forecast, total };
+}
+function weekCalibHtml(st) {
+  const c = st && st.cal;
+  const state = c
+    ? `Calibrated at ${esc(hhmm(c.at))}${st.earlier ? " (calibrated in an earlier week)" : ""}: Claude said ${esc(c.pct)}% used when this Mac had ${esc(compact(c.used_at_cal))} weighted units in the window.`
+    : "The meter only sees this Mac.";
+  return WEEKCAL.open
+    ? `<div>${state}</div><div class="row"><label for="wkIn">Claude's <b>/usage</b> says</label><input id="wkIn" type="number" min="1" max="100" step="1" inputmode="numeric" aria-label="Percent used this week according to Claude's /usage">% used this week<label for="wkReset">resets at</label><input id="wkReset" type="datetime-local" aria-label="Weekly reset time"><button class="iconbtn" type="button" id="wkSet">Set</button>${c ? '<button class="iconbtn" type="button" id="wkClear">Clear</button>' : ""}<button class="linkish" type="button" id="wkCancel">cancel</button></div>`
+    : `<span>${state}</span> <button class="linkish" type="button" id="wkOpen">${c ? "recalibrate" : "Set from /usage"}</button>`;
+}
+function bindWeekCalib() {
+  const on = (id, f) => { const b = $(id); if (b) b.addEventListener("click", f); };
+  on("wkOpen", () => {
+    WEEKCAL.open = true; renderWeekBox();
+    const c = WEEKCAL.v;
+    if (c) { $("wkIn").value = String(c.pct); $("wkReset").value = weekInputTime(c.reset_ms); }
+    if ($("wkIn")) $("wkIn").focus();
+  });
+  on("wkCancel", () => { WEEKCAL.open = false; renderWeekBox(); });
+  on("wkClear", () => {
+    WEEKCAL.v = null; try { localStorage.removeItem("wamt-week"); } catch (_) {}
+    WEEKCAL.open = false; renderWeekBox(); alerts(S.live);
+  });
+  on("wkSet", () => {
+    const pct = Number($("wkIn").value);
+    const reset = weekReset(weekParseReset($("wkReset").value));
+    if (!(pct > 0 && pct <= 100) || !(reset > 0)) return;
+    WEEKCAL.v = { pct: Math.round(pct), reset_ms: reset, at: now(), used_at_cal: weekUsage(reset - WEEK_MS, reset).used };
+    try { localStorage.setItem("wamt-week", JSON.stringify(WEEKCAL.v)); } catch (_) {}
+    WEEKCAL.open = false; renderWeekBox(); alerts(S.live);
+  });
+  const inp = $("wkIn");
+  if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { const b = $("wkSet"); if (b) b.click(); } if (e.key === "Escape") { WEEKCAL.open = false; renderWeekBox(); } });
+}
+
 // The 7-day strip: totals per day, oldest left. Days 4 to 7 have no thread detail.
-function weekHtml(D) {
+function weekInner(D) {
   const W = D.week; if (!W || !W.length) return "";
-  const info = D.week_info || { total_w: 0, hits: [], cap: null };
+  const info = D.week_info || { total_w: 0, hits: [] };
   const maxW = Math.max(1e-9, ...W.map((d) => d.total.w));
   const maxCx = Math.max(1, ...W.map((d) => d.codex_tokens));
   const totW = info.total_w || 0;
@@ -1227,23 +1365,28 @@ function weekHtml(D) {
       <div class="wcx num">${d.codex_tokens ? "GPT " + compact(d.codex_tokens) : "&nbsp;"}</div><div class="wcxbar">${d.codex_tokens ? `<i style="width:${((d.codex_tokens / maxCx) * 100).toFixed(1)}%"></i>` : ""}</div>
       <div class="wday">${esc(name)}<small>${esc(date)}</small></div></div>`;
   }).join("");
-  // Weekly total, and a cap line only when a weekly limit hit was recorded.
-  const cap = info.cap, famTot = [0, 0, 0, 0];
-  W.forEach((d) => d.fam.forEach((v, f) => { famTot[f] += v; }));
+  const st = weekState();
   const plate = S.live && S.live.window && S.live.window.cap && S.live.window.cap.used > 0 ? totW / S.live.window.cap.used : 0;
-  let capHtml;
-  if (cap && cap > 0) {
-    const scaleMax = Math.max(1, totW / cap);
-    const segs = famTot.map((v, f) => (v > 0 ? `<i style="width:${((v / cap) / scaleMax * 100).toFixed(2)}%;background:var(--m${f})" data-tip="<b>${FAM[f]}</b>: ${((v / cap) * 100).toFixed(1)}% of the weekly cap"></i>` : "")).join("");
-    const hitAt = info.cap_hit ? dayParts(new Date(info.cap_hit + off() * 60000).toISOString().slice(0, 10)).short + " " + hhmm(info.cap_hit) : "";
-    capHtml = `<div class="wbar">${segs}<span class="capline" style="left:calc(${(100 / scaleMax).toFixed(2)}% - 1px)" data-tip="The 7-day usage at the last weekly limit hit"></span></div>
-      <p class="fine">This week is ${Math.round((totW / cap) * 100)}% of what the 7 days weighed when the weekly limit was last hit (${esc(hitAt)}). Estimated; claude.ai chat and other devices are invisible here.</p>`;
+  let meterHtml;
+  if (st && st.cal && st.cap > 0) {
+    const pct = st.pct * 100, scaleMax = Math.max(100, pct * 1.05);
+    const segs = st.fam.map((v, i) => (v > 0 ? `<i style="width:${((v / st.cap) * 100 / scaleMax * 100).toFixed(2)}%;background:var(--m${i})" data-tip="<b>${FAM[i]}</b>: ${esc(((v / st.cap) * 100).toFixed(1))}% of the weekly cap"></i>` : "")).join("");
+    const note = st.hit
+      ? `Cap drawn from the weekly limit hit at ${esc(hhmm(st.hit))}.`
+      : `Calibrated from Claude's /usage${st.earlier ? " in an earlier week" : ""}.`;
+    meterHtml = `<div class="wkmeter"><div class="hero"><span class="big din num">${pct < 10 ? pct.toFixed(1) : Math.round(pct)}</span><span class="pct din">%</span><span class="of">of the weekly limit; resets ${esc(weekWdTime(st.reset))}</span></div>
+      <div class="wbar">${segs}<span class="capline" style="left:calc(${(100 / scaleMax * 100).toFixed(2)}% - 1px)" data-tip="The weekly cap"></span></div>
+      <div class="wscale"><span>0</span><span>weekly cap</span></div>
+      <p class="forecast">${st.forecast}${st.forecast ? '<span class="tag">estimate</span>' : ""}</p>
+      <p class="fine">${note} ${esc(compact(st.used))} weighted units this week on this Mac, cap ${esc(compact(st.cap))}. claude.ai chat and other devices are invisible here, so all figures are estimates.</p></div>`;
   } else {
-    capHtml = `<p class="fine">No weekly limit hit is recorded in these 7 days, so there is no cap line. Claude Code marks weekly hits apart from 5-hour ones (limit type in the error line), so one will be drawn as soon as it is seen. Days 4 to 7 keep totals only.</p>`;
+    meterHtml = `<p class="fine">Set the weekly % from /usage to see a weekly meter.</p>`;
   }
-  return `<div class="weekbox"><div class="weekhead"><h3>the week so far</h3><button class="iconbtn" type="button" data-csv title="Daily totals for the last 7 days, as a CSV file">Download CSV</button><div class="weektot"><span class="big num">${compact(totW)}</span><span>weighted units, last 7 days</span>${plate >= 0.05 ? `<span data-tip="Weighted 7-day total divided by what the last 5-hour limit hit used">about ${plate.toFixed(1)} full 5-hour plates</span>` : ""}${info.codex_tokens ? `<span>GPT ${compact(info.codex_tokens)} tokens</span>` : ""}</div></div>
-    <div class="weekcols">${cols}</div>${capHtml}</div>`;
+  return `<div class="weekhead"><h3>the week so far</h3><button class="iconbtn" type="button" data-csv title="Daily totals for the last 7 days, as a CSV file">Download CSV</button><div class="weektot"><span class="big num">${compact(totW)}</span><span>weighted units, last 7 days</span>${plate >= 0.05 ? `<span data-tip="Weighted 7-day total divided by what the last 5-hour limit hit used">about ${plate.toFixed(1)} full 5-hour plates</span>` : ""}${info.codex_tokens ? `<span>GPT ${compact(info.codex_tokens)} tokens</span>` : ""}</div></div>
+    <div class="weekcols">${cols}</div>${meterHtml}<div class="wcal" id="weekCalib">${weekCalibHtml(st)}</div>`;
 }
+function weekHtml(D) { const inner = weekInner(D); return inner ? `<div class="weekbox" id="weekBox">${inner}</div>` : ""; }
+function renderWeekBox() { const el = $("weekBox"); if (el && S.days) el.innerHTML = weekInner(S.days); bindWeekCalib(); }
 
 function renderDays(force) {
   const D = S.days; if (!D || !D.days) return;
@@ -1352,6 +1495,7 @@ function renderDays(force) {
       }).join("") + "</tbody></table></div>" + (prs.length > 12 ? `<p class="fine">and ${prs.length - 12} more</p>` : "");
   }
   $("days").innerHTML = h;
+  bindWeekCalib();
   for (const el of document.querySelectorAll(".dstrip")) {
     const i = Number(el.dataset.i);
     el.innerHTML = stripSvg(days[i], i === 0, maxW, Math.max(200, el.clientWidth));
@@ -1571,6 +1715,8 @@ function alerts(L) {
     events.push([`wait:${t.id}:${since}`, "A thread needs you", t.title || "A T3 thread is waiting on you"]);
   }
   if (pct != null && pct >= 0.8) events.push([`p80:${w.start_ms}`, `The plate is ${Math.round(pct * 100)}% eaten`, `Resets at ${hhmm(w.end_ms)}. Estimated from this Mac's usage.`]);
+  const wk = weekState();
+  if (wk && wk.cal && wk.cap > 0 && wk.pct >= 0.8) events.push([`w80:${wk.start}`, `The weekly meter is ${Math.round(wk.pct * 100)}% used`, `Resets ${weekWdTime(wk.reset)}. Estimated from this Mac's usage.`]);
   if (w && w.active && w.cap) for (const t of L.threads) {
     const share = (t.eat30 || 0) / w.cap.used;
     if (share >= 0.25) events.push([`binge:${t.id}:${w.start_ms}`, `${t.title || "A thread"} is binging`, `It ate ${Math.round(share * 100)}% of the 5-hour plate in the last 30 minutes. Check it is not stuck in a loop.`]);

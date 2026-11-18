@@ -532,13 +532,12 @@ fn tail_worker(root: PathBuf, codex_root: PathBuf, state_dir: PathBuf, shared: A
             last_pub = now;
             let anchors = shared.lock().unwrap().anchors();
             let window = t.agg.window(now, &anchors);
-            t.agg.refresh_week_cap(now, off);
             if changed || force {
                 let cxd: HashMap<i32, u64> = cx
                     .as_ref()
                     .map(|c| c.agg.days.iter().map(|(d, a)| (*d, a.total().t.total())).collect())
                     .unwrap_or_default();
-                week_part = build_week(&t.agg.week(day), &cxd, &t.agg.week_hits, t.agg.week_cap.as_ref(), off);
+                week_part = build_week(&t.agg.week(day), &cxd, &t.agg.week_hits, off);
                 let mut v: Vec<(i32, DayAgg)> = Vec::with_capacity(3);
                 for d in [day, day - 1, day - 2] {
                     let mut a = t.agg.days.get(&d).cloned();

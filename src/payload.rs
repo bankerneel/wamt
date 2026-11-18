@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::agg::{CapRef, ColdUse, DayAgg, Use, WeekDay, WindowEst};
+use crate::agg::{ColdUse, DayAgg, Use, WeekDay, WindowEst};
 use crate::sys::{memory_bytes, Sys};
 use crate::t3::{ActiveRun, Ctx, Pr, RunRow, Subagent, ThreadMeta, Waiting};
 use crate::tail::{SessionInfo, TailStats};
@@ -69,12 +69,9 @@ pub struct WeekInfo {
     /// Weighted units over the 7 days.
     pub total_w: f64,
     pub codex_tokens: u64,
-    /// Weekly-limit hits in the window.
+    /// Weekly-limit hits in the window. The page anchors a cap to a hit that
+    /// falls inside the calibrated weekly window; no cap is computed here.
     pub hits: Vec<i64>,
-    /// Weighted usage of the 7 days up to the latest weekly-limit hit. None
-    /// when no weekly hit is recorded (then no cap line is drawn).
-    pub cap: Option<f64>,
-    pub cap_hit: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -116,8 +113,8 @@ fn join_names(names: &[String]) -> String {
 
 /// Builds the 7-day payload from compact day summaries (oldest first).
 /// `codex` maps a local day to Codex tokens that day.
-pub fn build_week(claude: &[WeekDay], codex: &HashMap<i32, u64>, hits: &[i64], cap: Option<&CapRef>, off: i32) -> WeekPart {
-    let mut info = WeekInfo { hits: hits.to_vec(), cap: cap.map(|c| round2(c.used)), cap_hit: cap.map(|c| c.hit_ms), ..Default::default() };
+pub fn build_week(claude: &[WeekDay], codex: &HashMap<i32, u64>, hits: &[i64], off: i32) -> WeekPart {
+    let mut info = WeekInfo { hits: hits.to_vec(), ..Default::default() };
     let days: Vec<WeekDayOut> = claude
         .iter()
         .map(|d| {
@@ -1231,7 +1228,7 @@ mod tests {
         add(&mut a, day_start_ms(today - 5, OFF) + 3 * MS_PER_HOUR, "claude-haiku-5-5", 500, "t3");
         let mut cx = HashMap::new();
         cx.insert(today - 1, 777u64);
-        let w = build_week(&a.week(today), &cx, &[], None, OFF);
+        let w = build_week(&a.week(today), &cx, &[], OFF);
         assert_eq!(w.days.len() as i32, WEEK_DAYS);
         assert_eq!(w.days[6].start, day_start_ms(today, OFF));
         assert_eq!(w.days[0].start, day_start_ms(today - 6, OFF));
@@ -1241,7 +1238,7 @@ mod tests {
         assert_eq!(w.days[5].codex_tokens, 777);
         assert_eq!(w.info.codex_tokens, 777);
         assert_eq!(w.days[0].hours.len(), 24);
-        assert!(w.info.cap.is_none() && w.info.cap_hit.is_none());
+        assert!(w.info.hits.is_empty());
         let sum: f64 = w.days.iter().map(|d| d.total.w).sum();
         assert!((w.info.total_w - sum).abs() < 1e-9 && sum > 0.0);
         // Serialises with the keys the page reads.
@@ -1253,25 +1250,21 @@ mod tests {
     }
 
     #[test]
-    fn week_cap_only_when_a_weekly_hit_exists() {
+    fn weekly_hits_are_sent_without_a_server_cap() {
         let mut a = Agg::default();
         let now = now_ms();
         let today = day_of(now, OFF);
-        add(&mut a, day_start_ms(today - 2, OFF) + MS_PER_HOUR, "claude-opus-5-5", 1000, "a");
         add(&mut a, day_start_ms(today, OFF) + MS_PER_HOUR, "claude-opus-5-5", 1000, "b");
-        add(&mut a, day_start_ms(today, OFF) + 9 * MS_PER_HOUR, "claude-opus-5-5", 1000, "c");
-        a.refresh_week_cap(now, OFF);
-        assert!(a.week_cap.is_none());
-        // A hit at 03:00 today counts usage up to that hour only (not "c").
+        // A weekly hit is kept apart from the 5-hour hits; no cap is measured
+        // on the server because the weekly limit has a fixed reset, not a
+        // rolling 7-day window.
         assert!(a.add_weekly_hit(day_start_ms(today, OFF) + 3 * MS_PER_HOUR));
-        a.refresh_week_cap(now, OFF);
-        let cap = a.week_cap.clone().unwrap();
-        let one = crate::transcript::weight("claude-opus-5-5", &Tokens { output: 1000, ..Default::default() }, false);
-        assert!((cap.used - 2.0 * one).abs() < 1e-6, "{}", cap.used);
-        // A weekly hit never touches the 5-hour hits.
         assert!(a.hits.is_empty());
-        let w = build_week(&a.week(today), &HashMap::new(), &a.week_hits, a.week_cap.as_ref(), OFF);
-        assert!(w.info.cap.is_some() && w.info.hits.len() == 1);
+        let w = build_week(&a.week(today), &HashMap::new(), &a.week_hits, OFF);
+        assert_eq!(w.info.hits.len(), 1);
+        let v: serde_json::Value = serde_json::to_value(&w.info).unwrap();
+        assert!(v.get("hits").is_some());
+        assert!(v.get("cap").is_none() && v.get("cap_hit").is_none());
     }
 
     // ---------------------------------------------------------------- tips

@@ -228,12 +228,9 @@ pub struct Agg {
     /// Limit hits (deduped), last 7 days.
     pub hits: Vec<i64>,
     /// Weekly-limit hits (deduped), last 7 days. Kept apart from `hits` so a
-    /// weekly cap never sets the 5-hour plate's reference.
+    /// weekly hit never sets the 5-hour plate's reference.
     #[serde(default)]
     pub week_hits: Vec<i64>,
-    /// Weighted usage of the 7 days up to the latest weekly-limit hit.
-    #[serde(default)]
-    pub week_cap: Option<CapRef>,
     /// Kept past the 3-day window on purpose (one number).
     pub cap_ref: Option<CapRef>,
     /// The latest window worked out (start, end, from a recorded reset).
@@ -382,34 +379,6 @@ impl Agg {
         self.week_hits.sort_unstable();
         self.dirty = true;
         true
-    }
-
-    /// Measures the 7 days up to the latest weekly-limit hit, when all 7 of
-    /// them are still held (the hit is from today). The hit day counts up to
-    /// the hit hour. Kept once measured, like the 5-hour reference.
-    pub fn refresh_week_cap(&mut self, now_ms: i64, off: i32) {
-        let Some(&h) = self.week_hits.last() else { return };
-        if self.week_cap.as_ref().is_some_and(|c| c.hit_ms >= h) {
-            return;
-        }
-        let hd = day_of(h, off);
-        if hd - (WEEK_DAYS - 1) < day_of(now_ms, off) - (WEEK_DAYS - 1) {
-            return;
-        }
-        let mut used = 0.0;
-        for d in hd - (WEEK_DAYS - 1)..=hd {
-            let Some(a) = self.days.get(&d) else { continue };
-            if d < hd {
-                used += a.hours.iter().map(|x| x.iter().sum::<f64>()).sum::<f64>();
-            } else {
-                let hr = hour_of(h, off);
-                used += a.hours.iter().take(hr + 1).map(|x| x.iter().sum::<f64>()).sum::<f64>();
-            }
-        }
-        if used > 0.0 {
-            self.week_cap = Some(CapRef { used, hit_ms: h, start_ms: day_start_ms(hd - (WEEK_DAYS - 1), off) });
-            self.dirty = true;
-        }
     }
 
     /// Weighted usage per local day for the last 7 days, oldest first.
